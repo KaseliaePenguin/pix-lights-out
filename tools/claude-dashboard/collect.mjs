@@ -221,7 +221,9 @@ export function collect(projectPath = process.env.DASHBOARD_PROJECT ?? process.c
           const note = notes.byToolUseId.get(c.id);
           let status = 'running';
           if (note?.status) status = note.status;
-          else if (result && !input.run_in_background) status = result.block.is_error ? 'failed' : 'completed';
+          // 起動自体がエラーになった場合は完了通知が来ないため、結果のエラーで失敗と判定する
+          else if (result?.block.is_error) status = 'failed';
+          else if (result && !input.run_in_background) status = 'completed';
           agentRuns.push({
             session: id,
             toolUseId: c.id,

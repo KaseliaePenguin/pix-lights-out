@@ -62,6 +62,8 @@
     --info: #3987e5;
   }
   * { box-sizing: border-box; }
+  /* main などに display を指定しても hidden 属性で確実に非表示にする (タブ切り替え用) */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--surface-0); color: var(--text-primary);
     font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
