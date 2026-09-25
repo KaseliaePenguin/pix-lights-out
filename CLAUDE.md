@@ -25,7 +25,7 @@ public/assets/  画像・音声などの静的アセット (実行時は /assets
 - ビルド / 開発サーバー: Vite 6
 - 描画: Canvas 2D API (800×600、`index.html` で定義)
 - 実行環境: Node.js 24 / npm (開発時)、モダンブラウザ (実行時)
-- 外部ランタイム依存なし (devDependencies は typescript と vite のみ)
+- 外部ランタイム依存なし (devDependencies は typescript、vite、画像変換用の sharp)
 
 ### コマンド
 
@@ -37,6 +37,28 @@ npm run preview    # ビルド結果の確認
 ```
 
 変更後は `npm run build` が通ることを確認する。
+
+### アセット生成 (ピクセルアート)
+
+- アートスタイルはピクセルアート。画像はローカルの Stable Diffusion (ComfyUI + SDXL + pixel-art-xl LoRA) で生成する
+- ComfyUI は `C:\Users\yutak\ComfyUI` にあり、`http://127.0.0.1:8188` で動かす。セットアップと使い方は `docs/setup/comfyui.md`
+- `npm run gen:image` で元画像を `assets-src/generated/` に生成し、`npm run gen:sprite` でゲーム用の透過 PNG に変換して `public/assets/` に置く
+- `assets-src/` は中間ファイル置き場 (git 管理外)。スタイルガイドは `docs/art/style-guide.md`、パレットは `docs/art/palette.json`
+- `sharp` は生成スクリプト用の devDependency で、ゲーム本体では使わない
+
+## サブエージェント
+
+`.claude/agents/` に定義。企画 → 見た目の方針 → 画像 → 実装 → 確認の順につながる。
+
+| エージェント | 担当 |
+| --- | --- |
+| game-designer | 仕様書 (`docs/design/`) |
+| art-director | スタイルガイド・パレット・見た目のレビュー (`docs/art/`) |
+| 2d-illustrator | ピクセルアートの生成と配置 (`public/assets/`) |
+| game-engineer | エンジン層・基盤機能 (`src/core/`) |
+| scene-builder | シーンの実装 (`src/scenes/`) |
+| build-checker | ビルド確認とエラー修正 |
+| code-reviewer | 変更のレビュー (コードは変更しない) |
 
 ## 命名規則
 

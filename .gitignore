@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# 画像生成の中間ファイル
+assets-src/generated/
+assets-src/previews/
