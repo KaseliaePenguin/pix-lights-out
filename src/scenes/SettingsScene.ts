@@ -19,8 +19,8 @@ import type { CameraMode, NameTagMode, Settings } from './settingsStorage';
 type SettingsItem = 'bgmVolume' | 'seVolume' | 'screenShake' | 'showGhost' | 'nameTags' | 'cameraMode' | 'controls' | 'back';
 
 const items: readonly SettingsItem[] = ['bgmVolume', 'seVolume', 'screenShake', 'showGhost', 'nameTags', 'cameraMode', 'controls', 'back'];
-const cameraModes: readonly CameraMode[] = ['fixed', 'rotate', 'rotateStep'];
-const cameraModeLabels: Record<CameraMode, string> = { fixed: 'FIXED', rotate: 'ROTATE', rotateStep: 'ROTATE STEP' };
+const cameraModes: readonly CameraMode[] = ['rotate', 'fixed'];
+const cameraModeLabels: Record<CameraMode, string> = { rotate: 'ROTATE', fixed: 'FIXED' };
 const nameTagModes: readonly NameTagMode[] = ['all', 'self', 'off'];
 const nameTagLabels: Record<NameTagMode, string> = { all: 'ALL', self: 'SELF', off: 'OFF' };
 

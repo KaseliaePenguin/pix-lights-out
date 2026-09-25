@@ -15,7 +15,7 @@ export const saveData = new SaveData('pix-lights-out');
 export type NameTagMode = 'all' | 'self' | 'off';
 
 /** 走行画面のカメラ: 北が上で固定 / 車の向きに合わせてなめらかに回す / 段階的に回す */
-export type CameraMode = 'fixed' | 'rotate' | 'rotateStep';
+export type CameraMode = 'rotate' | 'fixed';
 
 export interface Settings {
   /** 0〜10 */
@@ -68,7 +68,9 @@ function toSettings(d: Record<string, unknown> | null): Settings {
   if (typeof d.screenShake === 'boolean') settings.screenShake = d.screenShake;
   if (typeof d.showGhost === 'boolean') settings.showGhost = d.showGhost;
   if (d.nameTags === 'all' || d.nameTags === 'self' || d.nameTags === 'off') settings.nameTags = d.nameTags;
-  if (d.cameraMode === 'fixed' || d.cameraMode === 'rotate' || d.cameraMode === 'rotateStep') settings.cameraMode = d.cameraMode;
+  if (d.cameraMode === 'fixed' || d.cameraMode === 'rotate') settings.cameraMode = d.cameraMode;
+  // 廃止した ROTATE STEP を選んでいた場合は ROTATE にする
+  else if (d.cameraMode === 'rotateStep') settings.cameraMode = 'rotate';
   return settings;
 }
 

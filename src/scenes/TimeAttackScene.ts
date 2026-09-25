@@ -169,7 +169,7 @@ export class TimeAttackScene implements Scene {
   /** 設定のカメラの方式を反映する。回転に切り替えたときは、向きをすぐに車に合わせる */
   private applyCameraMode(mode: CameraMode): void {
     const before = this.camera.rotation;
-    this.camera.rotation = mode === 'fixed' ? 'fixed' : mode === 'rotate' ? 'smooth' : 'step';
+    this.camera.rotation = mode === 'fixed' ? 'fixed' : 'smooth';
     const car = this.session?.car;
     if (car && before === 'fixed' && this.camera.rotation !== 'fixed') this.camera.snapTo(car.x, car.y, car.heading);
   }

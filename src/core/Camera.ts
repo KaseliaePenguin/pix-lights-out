@@ -1,8 +1,5 @@
-/**
- * 回転の方式。fixed = 北が常に上、smooth = 追従対象の向きになめらかに回す、
- * step = 回す角度を rotationSteps 段階に丸める (回転した格子のちらつきを、角度が変わる瞬間だけにする)
- */
-export type CameraRotation = 'fixed' | 'smooth' | 'step';
+/** 回転の方式。fixed = 北が常に上、smooth = 追従対象の向きになめらかに回す */
+export type CameraRotation = 'fixed' | 'smooth';
 
 export interface CameraOptions {
   /** 追従先を速度の何秒先にするか */
@@ -22,8 +19,6 @@ export interface CameraOptions {
   rotationTime: number;
   /** 低速などで「ゆっくり回す」ときの時定数 (秒) */
   rotationSlowTime: number;
-  /** step のときの 1 周の段階数 */
-  rotationSteps: number;
   /** 回転するときの先読み: 前方 (画面の上) へ base + 速さ × time だけ注視点をずらす (最大 max、px) */
   rotatedLookAheadBase: number;
   rotatedLookAheadTime: number;
@@ -42,7 +37,6 @@ export const defaultCameraOptions: Readonly<CameraOptions> = {
   // 第 4 版: ユーザーの穏やかなステア (steerRise 3.5) に合わせ、仕様の 0.25 秒より少し遅く追う
   rotationTime: 0.35,
   rotationSlowTime: 1.5,
-  rotationSteps: 64,
   rotatedLookAheadBase: 40,
   rotatedLookAheadTime: 0.25,
   rotatedLookAheadMax: 150,
@@ -59,7 +53,7 @@ export class Camera {
   shakeEnabled = true;
   /** 回転の方式 (設定) */
   rotation: CameraRotation = 'fixed';
-  /** 回転するときの向き (0 = 北が上、時計回りが正)。step の丸めを含めない値 */
+  /** 回転するときの向き (0 = 北が上、時計回りが正) */
   angle = 0;
   private lookAhead = 0;
 
@@ -84,14 +78,9 @@ export class Camera {
     }
   }
 
-  /** 画面の描画に使う向き。fixed なら 0、step なら段階に丸めた値 */
+  /** 画面の描画に使う向き。fixed なら 0 */
   get renderAngle(): number {
-    if (this.rotation === 'fixed') return 0;
-    if (this.rotation === 'step') {
-      const unit = (Math.PI * 2) / this.options.rotationSteps;
-      return Math.round(this.angle / unit) * unit;
-    }
-    return this.angle;
+    return this.rotation === 'fixed' ? 0 : this.angle;
   }
 
   /**
@@ -110,7 +99,7 @@ export class Camera {
     }
     const wanted = Math.min(o.rotatedLookAheadMax, o.rotatedLookAheadBase + Math.max(0, speed) * o.rotatedLookAheadTime);
     this.lookAhead += (wanted - this.lookAhead) * (1 - Math.exp(-o.followRate * dt));
-    // 描画に使う向き (step の丸めを含む) の前方にずらす。向きと注視点がずれると、追従対象が画面の横にぶれるため
+    // 描画に使う向きの前方にずらす。向きと注視点がずれると、追従対象が画面の横にぶれるため
     const a = this.renderAngle;
     this.x = targetX + Math.sin(a) * this.lookAhead;
     this.y = targetY - Math.cos(a) * this.lookAhead;
