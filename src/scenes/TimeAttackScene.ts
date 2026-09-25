@@ -292,7 +292,7 @@ export class TimeAttackScene implements Scene {
     const car = session.car;
 
     // タイヤ痕: skidRear で後輪 2 本、skidFront で前輪 2 本 (スピン中は Car が両方立てる)
-    // TODO(render): TireMarks.update(dt) ができたら、走行中 (ポーズ中以外) に毎フレーム呼ぶ
+    marks.update(dt);
     for (const index of wheels) {
       const isFront = index < 2;
       if (isFront ? car.skidFront : car.skidRear) {
