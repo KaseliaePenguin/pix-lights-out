@@ -13,9 +13,9 @@ import {
   wasMenuDownPressed,
   wasMenuUpPressed,
 } from './menuKeys';
-import { PlayScene } from './PlayScene';
 import { SettingsScene } from './SettingsScene';
 import { loadTimeAttackBest } from './settingsStorage';
+import { TimeAttackScene } from './TimeAttackScene';
 import { TitleScene } from './TitleScene';
 
 type MenuItem = 'timeAttack' | 'singleRace' | 'multiplayer' | 'settings' | 'controls';
@@ -106,10 +106,9 @@ export class MenuScene implements Scene {
     const game = this.game;
     switch (entry.item) {
       case 'timeAttack':
-        // TODO(scene): 基盤ができたら RaceScene (session: 'timeAttack') に差し替える
         // メニューの曲を止める (走行画面の BGM は走行画面が流す)
         game.audio.stopBgm();
-        game.changeScene(new PlayScene(game));
+        game.changeScene(new TimeAttackScene(game));
         break;
       case 'settings':
         game.changeScene(new SettingsScene(game, () => game.changeScene(new MenuScene(game, 'settings'))));

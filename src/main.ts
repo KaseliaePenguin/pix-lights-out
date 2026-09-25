@@ -2,6 +2,7 @@ import { assetManifest, soundDefs } from './assetList';
 import { Game } from './core/Game';
 import type { Scene } from './core/Scene';
 import { applyVolumeSettings, loadSettings } from './scenes/settingsStorage';
+import { TimeAttackScene } from './scenes/TimeAttackScene';
 import { TitleScene } from './scenes/TitleScene';
 import { colors } from './ui/colors';
 import { drawText, setUiFontImage } from './ui/text';
@@ -36,5 +37,7 @@ void game.assets
   .finally(() => {
     // 読めなかったものは代用 (図形・代用フォント・無音) で続ける
     setUiFontImage(game.assets.getImage('ui-font-5x7'));
-    game.changeScene(new TitleScene(game));
+    // 開発時だけ: ?scene=timeattack で走行画面から始める (headless のスクリーンショット確認用)
+    const isTimeAttackDirect = import.meta.env.DEV && new URLSearchParams(location.search).get('scene') === 'timeattack';
+    game.changeScene(isTimeAttackDirect ? new TimeAttackScene(game) : new TitleScene(game));
   });
