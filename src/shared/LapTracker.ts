@@ -64,6 +64,7 @@ export class LapTracker {
   private slowTimer = 0;
   private offTrackTimer = 0;
   private pitLeaveTimer = 0;
+  private isPitReentryAllowed = true;
   private prevS = 0;
   private readonly events: LapEvent[] = [];
 
@@ -79,6 +80,7 @@ export class LapTracker {
     this.isCheckpointMissed = false;
     this.isWrongWay = false;
     this.isInPitLane = false;
+    this.isPitReentryAllowed = true;
     this.wrongWayTimer = 0;
     this.slowTimer = 0;
     this.offTrackTimer = 0;
@@ -208,7 +210,9 @@ export class LapTracker {
     const halfWidth = track.widths[i] / 2;
     const ownArea = halfWidth + (lateral > 0 ? track.runoffRight[i] : track.runoffLeft[i]);
     if (!this.isInPitLane) {
-      if (track.surfaceCodeAt(car.x, car.y) === SurfaceCode.pit && Math.abs(lateral) > ownArea + 2) {
+      // 出たあとは、一度コースに戻るまで入り直さない (出口ラインの先もしばらくピットの路面が続くため)
+      if (!this.isPitReentryAllowed && Math.abs(lateral) < halfWidth + pitLeaveMargin) this.isPitReentryAllowed = true;
+      if (this.isPitReentryAllowed && track.surfaceCodeAt(car.x, car.y) === SurfaceCode.pit && Math.abs(lateral) > ownArea + 2) {
         this.isInPitLane = true;
         this.pitLeaveTimer = 0;
         this.events.push({ type: 'pitEntry' });
@@ -216,6 +220,7 @@ export class LapTracker {
       }
     } else if (crossForward(car, track.pitExitGate) >= 0) {
       this.isInPitLane = false;
+      this.isPitReentryAllowed = false;
       this.events.push({ type: 'pitExit' });
     } else {
       // 出口ラインを通らずにコースへ戻った (入口で引き返したなど) ときも、しばらくコース上にいれば解除する

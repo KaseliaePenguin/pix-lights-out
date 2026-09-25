@@ -4,7 +4,7 @@ import { carParams, raceRules, recordVersionOf } from './carParams';
 import type { Controls } from './controls';
 import { DrsController } from './DrsController';
 import type { GhostData } from './ghost';
-import { GhostPlayer, GhostRecorder, isGhostCompatible } from './ghost';
+import { GhostPlayer, GhostRecorder, isGhostCompatible, makeGhostFlags } from './ghost';
 import type { LapEvent } from './LapTracker';
 import { LapTracker } from './LapTracker';
 import type { Pose, Track } from './Track';
@@ -136,6 +136,12 @@ export class TimeAttackSession {
     return this.ghostPlayer.sample(this.lap.currentLapTime, out);
   }
 
+  /** ゴーストのフラグ (ドリフト中・ブーストの段階。makeGhostFlags の値)。表示できないときは 0 */
+  ghostFlags(): number {
+    if (!this.ghostPlayer || this.lap.lap === 0) return 0;
+    return this.ghostPlayer.sampleFlags(this.lap.currentLapTime);
+  }
+
   get hasGhost(): boolean {
     return this.ghostPlayer !== null;
   }
@@ -181,7 +187,7 @@ export class TimeAttackSession {
     if (this.drs.enabledOnEntry) this.events.push({ type: 'drsEnabled' });
     if (car.drsOpened) this.events.push({ type: 'drsOpened' });
     if (car.drsClosed) this.events.push({ type: 'drsClosed' });
-    if (this.recorder.isRecording) this.recorder.record(this.lap.currentLapTime, car.x, car.y, car.heading);
+    if (this.recorder.isRecording) this.recorder.record(this.lap.currentLapTime, car.x, car.y, car.heading, makeGhostFlags(car.isDrifting, car.boostTier));
     return this.events;
   }
 

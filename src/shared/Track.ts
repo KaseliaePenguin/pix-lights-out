@@ -1,7 +1,7 @@
 import type { SurfaceKind } from './carParams';
 import { raceRules } from './carParams';
 import { segmentIntersection } from './math';
-import type { RunoffSpec, TrackData, TrackRef, TurnSegment } from './trackData';
+import type { CornerStyle, RunoffSpec, TrackData, TrackRef, TurnSegment } from './trackData';
 
 /**
  * 路面コード (判定用グリッドの 1 マス = 2 px = 1 ドット)。値が大きいほど重なったときに優先される。
@@ -64,6 +64,18 @@ export interface WallContact {
   normalY: number;
 }
 
+/** コーナー (円弧のセグメント) の情報 */
+export interface CornerInfo {
+  readonly id: string;
+  readonly style: CornerStyle;
+  /** 円弧の始まりと終わり (中心線上の s) */
+  readonly s0: number;
+  readonly s1: number;
+  /** 曲がる角度 (rad、右が正) と中心線の半径 */
+  readonly angle: number;
+  readonly radius: number;
+}
+
 /** 描画用の縁石の区間 (中心線上の s の範囲と側) */
 export interface KerbSpan {
   readonly from: number;
@@ -77,9 +89,8 @@ const sdfCell = 4;
 const sdfBand = 48;
 const worldMargin = 240;
 /**
- * 中心線に沿ってこれより離れた部分同士だけ、間に壁を残す。ヘアピンの内側 (円弧の前後約 50 px) は
- * 壁を置かずに芝生でつなぎ、エイペックスを攻めたときに壁に当たらないようにする。
- * 400 にするとヘアピンの内側を芝生で横切る近道 (約 200 px) ができるので、300 にしている
+ * 中心線に沿ってこれより離れた部分同士だけ、間に壁を残す (同じコーナーの前後を「別の部分」とみなさないため)。
+ * ヘアピンの内側で壁を置かない範囲は、コースデータの TurnSegment.openInside で明示する
  */
 const clearanceMinGap = 300;
 
@@ -108,6 +119,8 @@ export class Track {
   readonly runoffLeft: Float64Array;
   readonly runoffRight: Float64Array;
   readonly kerbSpans: readonly KerbSpan[];
+  /** コーナーの一覧 (コースの順) */
+  readonly corners: readonly CornerInfo[];
 
   /** 路面の判定用グリッド (1 マス 2 px)。値は SurfaceCode */
   readonly gridWidth: number;
@@ -183,8 +196,16 @@ export class Track {
     const kerbR = new Uint8Array(n);
     const innerLimitL = new Float64Array(n).fill(Infinity);
     const innerLimitR = new Float64Array(n).fill(Infinity);
+    this.corners = raw.turns.map((t, i) => ({
+      id: t.seg.id ?? `turn${i + 1}`,
+      style: t.seg.style ?? 'either',
+      s0: t.s0,
+      s1: t.s1,
+      angle: (t.seg.angle * Math.PI) / 180,
+      radius: t.seg.radius,
+    }));
     this.buildCrossSection(raw.turns, gravelL, gravelR, kerbL, kerbR, innerLimitL, innerLimitR);
-    this.limitRunoffByClearance();
+    this.limitRunoffByClearance(raw.turns);
     for (let i = 0; i < n; i++) {
       this.runoffLeft[i] = Math.min(this.runoffLeft[i], innerLimitL[i] - this.widths[i] / 2);
       this.runoffRight[i] = Math.min(this.runoffRight[i], innerLimitR[i] - this.widths[i] / 2);
@@ -526,8 +547,22 @@ export class Track {
   }
 
   /** 別の部分のコースと近いところは、間に壁が残るようにランオフを狭める */
-  private limitRunoffByClearance(): void {
+  private limitRunoffByClearance(turns: readonly { seg: TurnSegment; s0: number; s1: number }[]): void {
     const n = this.sampleCount;
+    // ヘアピンの内側で壁を置かない範囲 (サンプル番号の範囲)
+    const openZones = turns
+      .filter((t) => (t.seg.openInside ?? 0) > 0)
+      .map((t) => ({ a: t.s0 - (t.seg.openInside ?? 0), b: t.s1 + (t.seg.openInside ?? 0) }));
+    const openZoneOf = (i: number): number => {
+      const s = i * this.sampleSpacing;
+      for (let z = 0; z < openZones.length; z++) {
+        const zone = openZones[z];
+        if ((s >= zone.a && s <= zone.b) || (s + this.length >= zone.a && s + this.length <= zone.b) || (s - this.length >= zone.a && s - this.length <= zone.b)) return z;
+      }
+      return -1;
+    };
+    const zoneOfSample = new Int16Array(n);
+    for (let i = 0; i < n; i++) zoneOfSample[i] = openZoneOf(i);
     const step = 2;
     const minWall = this.data.minWallThickness;
     const limL = new Float64Array(n).fill(Infinity);
@@ -545,6 +580,7 @@ export class Track {
         let dsIdx = Math.abs(i - j);
         dsIdx = Math.min(dsIdx, n - dsIdx);
         if (dsIdx * this.sampleSpacing < clearanceMinGap) continue;
+        if (zoneOfSample[i] >= 0 && zoneOfSample[i] === zoneOfSample[j]) continue;
         const lat = vx * rx + vy * ry;
         const along = vx * fx + vy * fy;
         const absLat = Math.abs(lat);

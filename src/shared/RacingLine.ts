@@ -1,3 +1,4 @@
+import { driftGain } from './Car';
 import type { CarParams } from './carParams';
 import { carParams } from './carParams';
 import type { Track } from './Track';
@@ -13,6 +14,13 @@ export interface RacingLineOptions {
   edgeMargin: number;
   /** 縁石に乗ってよい量 (px) */
   kerbUse: number;
+  /**
+   * ドリフトで曲がるコーナー (中心線上の円弧の範囲)。この範囲の目標速度は、ドリフトで曲がれる速度
+   * (car-physics.md 7.3 節の式、ドリフト角 driftPlanAngle) で計算する
+   */
+  driftCorners: readonly { s0: number; s1: number }[];
+  /** ドリフトの目標速度を計算するときのドリフト角 (rad) */
+  driftPlanAngle: number;
   params: Readonly<CarParams>;
 }
 
@@ -22,6 +30,8 @@ const defaultOptions: RacingLineOptions = {
   useDrs: true,
   edgeMargin: 11,
   kerbUse: 4,
+  driftCorners: [],
+  driftPlanAngle: (44 * Math.PI) / 180,
   params: carParams,
 };
 
@@ -118,7 +128,15 @@ export class RacingLine {
       const vTop = p.vBase * (1 + (drs ? p.drsBonus : 0));
       const kap = Math.abs(this.curvature[k]);
       let v = vTop;
-      if (kap > 1e-6) {
+      const ts = this.trackS[k];
+      const isDrift = opt.driftCorners.some((c) => ts >= c.s0 && ts <= c.s1);
+      if (isDrift && kap > 1e-6) {
+        // ドリフト: aLat = latGrip × G × gain(v) × min(beta / ref, max)。gain が速さで変わるので反復で解く
+        const factor = Math.min(opt.driftPlanAngle / p.driftAngleRef, p.driftLatMaxFactor);
+        let vd = 250;
+        for (let it = 0; it < 20; it++) vd = Math.sqrt((p.latGrip * opt.tyreGrip * driftGain(p, vd) * factor) / kap) * opt.skill;
+        v = Math.min(v, vd);
+      } else if (kap > 1e-6) {
         v = Math.min(v, Math.sqrt((p.latGrip * Math.min(grip, p.steerDemand)) / kap) * opt.skill);
         v = Math.min(v, p.yawMaxLow / kap);
       }
@@ -229,7 +247,9 @@ function smoothOffsets(
       const k1 = mengerCurvature(ax, ay, px(i, d[i] + delta), py(i, d[i] + delta), bx, by);
       const slope = (k1 - k0) / delta;
       if (Math.abs(slope) < 1e-12) continue;
-      const next = d[i] + (target - k0) / slope;
+      // 1 回に動かす量を制限する (きついコーナーで曲率の近似が外れて発散しないように)
+      const maxStep = 2;
+      const next = d[i] + Math.max(-maxStep, Math.min(maxStep, (target - k0) / slope));
       d[i] = Math.max(lo[i], Math.min(hi[i], next));
     }
   }

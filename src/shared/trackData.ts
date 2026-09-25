@@ -23,6 +23,9 @@ export interface StraightSegment {
   width?: number;
 }
 
+/** コーナーの印 (game-design.md 11.1 節): grip で速い / どちらでも / ドリフトで速い */
+export type CornerStyle = 'grip' | 'either' | 'drift';
+
 export interface TurnSegment {
   kind: 'turn';
   id?: string;
@@ -37,6 +40,13 @@ export interface TurnSegment {
   inside?: RunoffSpec;
   /** 縁石を置くか (既定 true) */
   kerbs?: boolean;
+  /** コーナーの印 (CPU の AI・デバッグ表示・sim の比較で使う) */
+  style?: CornerStyle;
+  /**
+   * ヘアピンの内側で、両側の直線の間に壁を置かない範囲 (円弧の前後の px)。
+   * この範囲の中どうしは「近い別の部分」とみなさず、芝生・砂利でつなぐ (壁が消える不具合を範囲で明示する)
+   */
+  openInside?: number;
 }
 
 export type TrackSegment = StraightSegment | TurnSegment;

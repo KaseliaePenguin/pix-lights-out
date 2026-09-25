@@ -39,7 +39,8 @@ export const defaultCameraOptions: Readonly<CameraOptions> = {
   boundY: 170,
   shakeTime: 0.25,
   shakeMax: 6,
-  rotationTime: 0.25,
+  // 第 4 版: ユーザーの穏やかなステア (steerRise 3.5) に合わせ、仕様の 0.25 秒より少し遅く追う
+  rotationTime: 0.35,
   rotationSlowTime: 1.5,
   rotationSteps: 64,
   rotatedLookAheadBase: 40,

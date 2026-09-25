@@ -1,104 +1,98 @@
-import type { RunoffSpec, TrackData, TrackSegment } from '../trackData';
+import type { RunoffSpec, TrackData } from '../trackData';
 
 const grass = (width: number, lead?: number, trail?: number): RunoffSpec => ({ kind: 'grass', width, lead, trail });
 const gravel = (width: number, lead?: number, trail?: number): RunoffSpec => ({ kind: 'gravel', width, lead, trail });
 
-/**
- * 形を保ったまま 1 周を約 17,800 px (game-design.md 11.1 節) にするための倍率。
- * 直線の長さとコーナーの半径にかける (コース幅・ランオフの幅は変えない)
- */
-const layoutScale = 1.0665;
-
-function scaled(segments: TrackSegment[]): TrackSegment[] {
-  return segments.map((seg) =>
-    seg.kind === 'straight'
-      ? { ...seg, length: seg.length * layoutScale }
-      : { ...seg, radius: seg.radius * layoutScale },
-  );
-}
+/** ヘアピンの内側で、両側の直線の間に壁を置かない範囲 (円弧の前後、px。game-design.md 11.2 節「近い場所」) */
+const hairpinOpenInside = 300;
 
 /**
- * コース 1 (仮称)。game-design.md 11.2 節のレイアウト案をもとに、閉じた形になるよう
- * 曲がる向きと一部の角度・直線の長さを調整したもの。時計回り、コントロールラインで北向き。
- * radius は中心線の半径 (レーシングラインの半径は、コース幅を使う分だけ大きくなる)。
- * 下の数値は layoutScale をかける前のもの。
+ * コース 1 (仮称)。game-design.md 第 4 版 11.2 節の値をそのまま使う (拡大しない)。
+ * 時計回り、コントロールラインで北向き。radius は中心線の半径。
+ * st3・st4 の長さは形が閉じるように計算した値 (11.2 節「閉じることの確かめ方」)。
+ *
+ * 仕様からの変更 (ユーザーの要望「U 字コーナーが曲がりづらい」とユーザーの yawMaxLow 2.0 に合わせて、コース側を緩やかにした):
+ * 半径 T6 90→120、T7 55→140、T8 40→70 (幅 90 で内側の端が中心を越えていたため)、T9 100→130、T11 120→160。
+ * 閉じるように st3 2534.3→2730、st4 2334.9→2182.2。
+ * S 字 (T2・T3) の内側を横切る近道 (見積もり約 0.27 秒得) を小さくするため、内側を芝生 30 → 砂利 40 にした (残りは約 0.17 秒以下の見積もり)
  */
 export const course1: TrackData = {
   id: 'course1',
   name: 'COURSE 1',
-  // 1: 最初の版 / 2: ヘアピンの間の壁が消えていた不具合の修正、区間 S1 の境界の変更
-  version: 2,
+  // 1: 最初の版 / 2: ヘアピンの間の壁の修正、区間 S1 の境界の変更 / 3: 第 4 版で作り直し
+  version: 3,
   startHeading: 0,
-  defaultWidth: 60,
+  defaultWidth: 80,
   lineWidth: 4,
   kerbWidth: 8,
   kerbExtend: 30,
-  straightRunoff: grass(40),
+  straightRunoff: grass(60),
   minWallThickness: 24,
-  segments: scaled([
-    { kind: 'straight', id: 'main1', length: 1927 },
-    { kind: 'turn', id: 'T1', angle: 90, radius: 45, outside: gravel(150, 120, 200) },
-    { kind: 'straight', id: 'st1', length: 1477 },
-    { kind: 'turn', id: 'T2', angle: 40, radius: 500, outside: grass(70) },
-    { kind: 'straight', id: 'st2', length: 188 },
-    { kind: 'turn', id: 'T3', angle: -40, radius: 500, outside: grass(70) },
-    { kind: 'straight', id: 'st3', length: 188 },
-    { kind: 'turn', id: 'T4', angle: 40, radius: 500, outside: grass(70) },
-    { kind: 'straight', id: 'st4', length: 1985 },
-    { kind: 'turn', id: 'T5', angle: -72.8, radius: 136, outside: grass(120) },
-    { kind: 'straight', id: 'st5', length: 1118 },
-    { kind: 'turn', id: 'T6', angle: 180, radius: 60, width: 70, outside: gravel(160, 150, 250), inside: grass(20) },
-    { kind: 'straight', id: 'back', length: 2750 },
-    { kind: 'turn', id: 'T7', angle: -60, radius: 70, width: 50, outside: gravel(100), inside: gravel(60) },
-    { kind: 'straight', id: 'st7', length: 88, width: 50 },
-    { kind: 'turn', id: 'T8', angle: 60, radius: 70, width: 50, outside: gravel(100), inside: gravel(60) },
-    { kind: 'straight', id: 'st8', length: 903 },
-    { kind: 'turn', id: 'T9', angle: 103, radius: 293, outside: grass(150) },
-    { kind: 'straight', id: 'st9', length: 920 },
-    { kind: 'turn', id: 'T10', angle: -87.3, radius: 56, outside: grass(100) },
-    { kind: 'straight', id: 'st10', length: 520 },
-    { kind: 'turn', id: 'T11', angle: -67.9, radius: 44, outside: grass(90) },
-    { kind: 'straight', id: 'st11', length: 313 },
-    { kind: 'turn', id: 'T12', angle: 82.4, radius: 84, outside: grass(100) },
-    { kind: 'straight', id: 'st12', length: 772 },
-    { kind: 'turn', id: 'T13', angle: 92.7, radius: 143, outside: grass(120) },
-    { kind: 'straight', id: 'main0', length: 899 },
-  ]),
+  segments: [
+    { kind: 'straight', id: 'main1', length: 1900 },
+    { kind: 'turn', id: 'T1', angle: 90, radius: 60, style: 'either', outside: gravel(160, 120, 200), inside: grass(30) },
+    { kind: 'straight', id: 'st1', length: 900 },
+    { kind: 'turn', id: 'T2', angle: -90, radius: 70, style: 'grip', outside: grass(120), inside: gravel(40) },
+    { kind: 'straight', id: 'st2', length: 200 },
+    { kind: 'turn', id: 'T3', angle: 90, radius: 70, style: 'grip', outside: grass(120), inside: gravel(40) },
+    { kind: 'straight', id: 'st3', length: 2730 },
+    { kind: 'turn', id: 'T4', angle: 90, radius: 120, style: 'grip', outside: grass(160), inside: grass(30) },
+    { kind: 'straight', id: 'st4', length: 2182.2 },
+    { kind: 'turn', id: 'T5', angle: 40, radius: 400, style: 'grip', outside: grass(150), inside: grass(30) },
+    { kind: 'straight', id: 'st5', length: 200 },
+    { kind: 'turn', id: 'T6', angle: -100, radius: 120, style: 'either', outside: grass(120), inside: grass(30) },
+    { kind: 'straight', id: 'st6', length: 400 },
+    {
+      kind: 'turn', id: 'T7', angle: 150, radius: 140, width: 100, style: 'drift',
+      outside: gravel(180, 150, 250), inside: gravel(40), openInside: hairpinOpenInside,
+    },
+    { kind: 'straight', id: 'back', length: 2800 },
+    { kind: 'turn', id: 'T8', angle: 90, radius: 70, style: 'either', outside: gravel(160, 120, 200), inside: grass(30) },
+    { kind: 'straight', id: 'st8', length: 1400 },
+    { kind: 'turn', id: 'T9', angle: -135, radius: 130, style: 'drift', outside: grass(130), inside: gravel(40) },
+    { kind: 'straight', id: 'st9', length: 800 },
+    { kind: 'turn', id: 'T10', angle: -45, radius: 200, style: 'grip', outside: grass(60), inside: grass(30) },
+    { kind: 'straight', id: 'st10', length: 700 },
+    {
+      kind: 'turn', id: 'T11', angle: 180, radius: 160, width: 100, style: 'drift',
+      outside: gravel(150), inside: gravel(40), openInside: hairpinOpenInside,
+    },
+    { kind: 'straight', id: 'main0', length: 900 },
+  ],
   widthZones: [
-    // 1 コーナー手前・ヘアピン手前のブレーキングゾーンは 70 px (並んで抜きやすくする)
-    { from: { seg: 'main1', t: 1, offset: -400 }, to: { seg: 'T1', t: 0 }, width: 70 },
-    { from: { seg: 'st5', t: 1, offset: -400 }, to: { seg: 'T6', t: 1 }, width: 70 },
+    // 最高速からのブレーキングゾーンは 90 px、ヘアピンの手前と弧は 100 px
+    { from: { seg: 'main1', t: 1, offset: -400 }, to: { seg: 'T1', t: 1 }, width: 90 },
+    { from: { seg: 'back', t: 1, offset: -400 }, to: { seg: 'T8', t: 1 }, width: 90 },
+    { from: { seg: 'st6', t: 1, offset: -300 }, to: { seg: 'T7', t: 1, offset: 100 }, width: 100 },
+    { from: { seg: 'st10', t: 1, offset: -300 }, to: { seg: 'T11', t: 1, offset: 100 }, width: 100 },
   ],
   runoffZones: [],
   sectorEnds: [
-    // 各区間の所要時間をそろえるため、S1 は T5 の手前の直線の途中で終える (game-design.md 第 3 版)
-    { seg: 'st4', t: 0.6 },
-    { seg: 'T8', t: 1, offset: 60 },
+    { seg: 'T4', t: 1, offset: 60 },
+    { seg: 'back', t: 0.75 },
   ],
-  // シケインの真ん中はコース幅だけのゲートにして、イン側のショートカットを無効にする
-  narrowGates: [{ seg: 'st7', t: 0.5 }],
+  narrowGates: [],
   drs: {
-    detection: { seg: 'T6', t: 0, offset: -150 },
+    detection: { seg: 'T7', t: 0, offset: -150 },
     start: { seg: 'back', t: 0, offset: 150 },
-    end: { seg: 'T7', t: 0, offset: -120 },
+    end: { seg: 'T8', t: 0, offset: -150 },
   },
   gridPoleSide: 'right',
+  // メインストレートの左側 (周回の外側、中心線から 110 px)。入口は main0 の約 28%、出口は main1 の約 53% (8.3 節)
   pitLane: {
     width: 64,
     runoff: 16,
     points: [
-      { at: { seg: 'st12', t: 0.35 }, lateral: 28 },
-      { at: { seg: 'st12', t: 0.7 }, lateral: 75 },
-      { at: { seg: 'T13', t: 0.5 }, lateral: 100 },
-      { at: { seg: 'main0', t: 0.3 }, lateral: 100 },
-      { at: { seg: 'main1', t: 0 }, lateral: 100 },
-      { at: { seg: 'main1', t: 0.8 }, lateral: 100 },
-      { at: { seg: 'st1', t: 0, offset: 250 }, lateral: 100 },
-      { at: { seg: 'st1', t: 0, offset: 450 }, lateral: 55 },
-      { at: { seg: 'st1', t: 0, offset: 650 }, lateral: 28 },
+      { at: { seg: 'main0', t: 0.28 }, lateral: -38 },
+      { at: { seg: 'main0', t: 0.28, offset: 250 }, lateral: -110 },
+      { at: { seg: 'main0', t: 0.28, offset: 400 }, lateral: -110 },
+      { at: { seg: 'main1', t: 0 }, lateral: -110 },
+      { at: { seg: 'main1', t: 0.53, offset: -400 }, lateral: -110 },
+      { at: { seg: 'main1', t: 0.53, offset: -250 }, lateral: -110 },
+      { at: { seg: 'main1', t: 0.53 }, lateral: -38 },
     ],
     entryPoint: 1,
-    exitPoint: 7,
+    exitPoint: 5,
   },
   referenceLapTime: null,
 };

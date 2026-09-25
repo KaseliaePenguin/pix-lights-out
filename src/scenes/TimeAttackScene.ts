@@ -14,7 +14,7 @@ import { TrackRenderer } from '../render/TrackRenderer';
 import type { WheelIndex } from '../shared/Car';
 import { computeCarSound, createCarSoundParams, wallImpactEffect } from '../shared/carEffects';
 import type { ImpactEffect } from '../shared/carEffects';
-import { defaultCarParams, raceRules, recordVersionOf, setCarParam } from '../shared/carParams';
+import { defaultCarParams, physicsVersion, raceRules, recordVersionOf, setCarParam } from '../shared/carParams';
 import { createControls } from '../shared/controls';
 import { deserializeGhost, serializeGhost } from '../shared/ghost';
 import type { GhostData } from '../shared/ghost';
@@ -61,17 +61,25 @@ const carParamGroupStarts: Readonly<Record<string, string>> = {
   vBase: 'longitudinal',
   steerRise: 'steering',
   latGrip: 'cornering',
+  driftEnterBrake: 'drift entry',
+  driftAngleNeutral: 'drift angle',
+  driftLatLow: 'drift motion',
+  driftExitAngle: 'drift exit',
+  driftSpinAngle: 'drift spin',
+  ersMinAngle: 'ers boost',
   squealStart: 'effects',
   slipBonus: 'slipstream',
   drsBonus: 'drs',
   cliffStart: 'tyre wear',
   restitution: 'contact',
+  spinTimeLight: 'spin',
   pitSpeedLimit: 'pit',
   hitWidth: 'size',
 };
 
 function getTuningStore(): TuningStore {
-  tuningStore ??= new TuningStore('pix-lights-out.tuning', [
+  // 保存キーに物理のバージョンを入れる: 挙動を作り直したとき (第 4 版など)、古い調整値が新しい挙動に当たらないように
+  tuningStore ??= new TuningStore(`pix-lights-out.tuning.v${physicsVersion}`, [
     { id: 'carParams', label: 'longitudinal', defaults: defaultCarParams, apply: setCarParam, groupStarts: carParamGroupStarts },
     {
       id: 'camera',
@@ -85,6 +93,9 @@ function getTuningStore(): TuningStore {
   ]);
   return tuningStore;
 }
+
+/** ERS の段階 1〜3 の色 (仮。art-director が決める) */
+const ersColors: readonly string[] = ['#22d3ee', '#ffd60a', '#f048b8'];
 
 /** コース復帰直後の点滅: 0.125 秒ごとに通常表示とシャドウ表示を入れ替える (style-guide.md §2) */
 const blinkInterval = 0.125;
@@ -182,7 +193,8 @@ export class TimeAttackScene implements Scene {
     }
     // スピン中・後退中は向きを止め、ごく低速ではゆっくり回す (向きが急に振れて酔わないように)
     const hold = car.isSpinning || car.isReversing ? 'freeze' : car.sF < cameraSlowSpeed ? 'slow' : 'none';
-    this.camera.updateRotating(dt, car.x, car.y, car.heading, car.sF, hold);
+    // 回転の基準: grip では車体の向き、ドリフト中は「進行方向 + ドリフト角 × 0.35」(game-design.md 10.5 節)
+    this.camera.updateRotating(dt, car.x, car.y, car.cameraHeading, car.isDrifting ? car.speed : car.sF, hold);
   }
 
   enter(): void {
@@ -247,11 +259,16 @@ export class TimeAttackScene implements Scene {
     else layer.setCamera(this.camera.renderX, this.camera.renderY);
     this.renderer.render(layer);
     this.marks.render(layer);
+    // スピンの兆候 (ドリフト角が深すぎる): 車体の絵を 1 ドット左右に揺らす (物理には影響しない)
+    const jitter = car.isSpinWarning ? (Math.floor(this.time * 30) % 2 === 0 ? 2 : -2) : 0;
+    const carX = car.x + Math.cos(car.heading) * jitter;
+    const carY = car.y + Math.sin(car.heading) * jitter;
     if (!isRotated) {
       if (hasGhost) drawCar(layer, images.getImage('car-base-ghost'), this.ghostPose.x, this.ghostPose.y, this.ghostPose.heading);
-      drawCar(layer, playerImage, car.x, car.y, car.drawHeading);
+      drawCar(layer, playerImage, carX, carY, car.drawHeading);
     }
     if (car.drsOpen) this.drawDrsWind();
+    if (car.boostTier > 0) this.drawBoostGlow();
     this.particles.render(layer);
     if (isRotated) {
       // 回転する表示: 画面揺れは回転後の画面にかける。車はワールド層ではなく画面に直接描く (回転を 1 回にしてドットの崩れを減らす)
@@ -259,7 +276,7 @@ export class TimeAttackScene implements Scene {
       const shakeY = this.camera.shakeY;
       layer.present(ctx, shakeX, shakeY);
       if (hasGhost) this.drawCarOnScreen(ctx, images.getImage('car-base-ghost'), this.ghostPose.x, this.ghostPose.y, this.ghostPose.heading, shakeX, shakeY);
-      this.drawCarOnScreen(ctx, playerImage, car.x, car.y, car.drawHeading, shakeX, shakeY);
+      this.drawCarOnScreen(ctx, playerImage, carX, carY, car.drawHeading, shakeX, shakeY);
     } else {
       layer.present(ctx);
     }
@@ -439,6 +456,17 @@ export class TimeAttackScene implements Scene {
       car.wheelPosition(rearWheels[Math.random() < 0.5 ? 0 : 1], this.wheel);
       this.particles.emitSmoke(this.wheel.x, this.wheel.y);
     }
+    // ドリフトのスモーク (仮): 量 1 で 1 輪あたり 0.05 秒に 1 個。コース外の車輪からは出さない (代わりに芝・砂利の跳ね)
+    if (car.isDrifting && car.smokeAmount > 0) {
+      for (const index of rearWheels) {
+        const surface = car.wheelSurfaces[index];
+        if (surface === 'grass' || surface === 'gravel') continue;
+        if (Math.random() < car.smokeAmount * (dt / 0.05)) {
+          car.wheelPosition(index, this.wheel);
+          this.particles.emitSmoke(this.wheel.x, this.wheel.y);
+        }
+      }
+    }
     this.particles.update(dt);
   }
 
@@ -476,7 +504,9 @@ export class TimeAttackScene implements Scene {
     const car = session.car;
     const throttle = car.controlLocked || this.controls.brake > 0 ? 0 : this.controls.throttle;
     const p = computeCarSound(car, session.gearbox, throttle, this.soundParams);
-    s.engine.update(session.gearbox.rpmRatio, throttle);
+    // ドリフト中は速度が落ちても回転が落ちにくいよう +0.1 (空転の感じ。car-physics.md 16 節)
+    const rpm = car.isDrifting ? Math.min(1, session.gearbox.rpmRatio + 0.1) : session.gearbox.rpmRatio;
+    s.engine.update(rpm, throttle);
     s.squeal.set(p.squealVolume, p.squealRate);
     s.grass.set(p.grassVolume, p.surfaceRate);
     s.gravel.set(p.gravelVolume, p.surfaceRate);
@@ -564,8 +594,47 @@ export class TimeAttackScene implements Scene {
 
     if (session.phase === 'countdown') drawCountdown(ctx, Math.ceil(session.countdownRemaining - 1e-9));
     if (this.isDebugVisible) drawDebugPanel(ctx, this.debugRows());
-    if (this.isRunTuned) drawText(ctx, 'TUNING', 12, 12, { color: colors.yellow });
+    this.drawErsGauge(ctx);
+    // 調整パネルで物理の値を変えている間は記録を保存しない (car-physics.md 19.1 節の表記 TUNED)
+    if (this.isRunTuned) drawText(ctx, 'TUNED', 12, 12, { color: colors.yellow });
     this.tuning?.render(ctx);
+  }
+
+  /**
+   * ERS ゲージ (仮の表示。見た目は art-director が決める。game-design.md 10.1 節)。車両状態パネルの上に、
+   * ドリフト中は溜まった段階、ブースト中は BOOST と残りの目盛りを出す
+   */
+  private drawErsGauge(ctx: CanvasRenderingContext2D): void {
+    const car = this.session?.car;
+    if (!car) return;
+    const x = 588;
+    const y = 462;
+    const isBoost = car.boostTier > 0;
+    const lit = isBoost ? car.boostTier : car.ersTier;
+    const blinkOff = isBoost && Math.floor(this.time * 8) % 2 === 1;
+    ctx.fillStyle = colors.ink;
+    ctx.fillRect(x, y, 200, 22);
+    drawText(ctx, isBoost ? 'BOOST' : 'ERS', x + 6, y + 4, { color: isBoost ? colors.yellow : colors.subtext });
+    for (let i = 0; i < 3; i++) {
+      const bx = x + 80 + i * 36;
+      ctx.fillStyle = i < lit && !blinkOff ? ersColors[i] : colors.surface;
+      ctx.fillRect(bx, y + 4, 30, 14);
+    }
+  }
+
+  /** ブースト中 (仮): 車の後方に段階ごとの色と大きさの光 */
+  private drawBoostGlow(): void {
+    const car = this.session?.car;
+    if (!car) return;
+    const ctx = this.layer.ctx;
+    const tier = car.boostTier;
+    ctx.fillStyle = ersColors[tier - 1];
+    const flicker = Math.floor(this.time * 20) % 2;
+    for (let k = 0; k < tier + 1 + flicker; k++) {
+      car.localToWorld(0, -24 - k * 4, this.wheel);
+      const size = Math.max(1, tier + 1 - k);
+      ctx.fillRect(this.layer.dotX(this.wheel.x) - Math.floor(size / 2), this.layer.dotY(this.wheel.y) - Math.floor(size / 2), size, size);
+    }
   }
 
   private debugRows(): DebugRow[] {
@@ -583,6 +652,10 @@ export class TimeAttackScene implements Scene {
       ['DRS', car.fDrs.toFixed(2)],
       ['WEAR', `${Math.round(car.wear * 100)}%`],
       ['LAP S', `${Math.round(session.lap.projection.s)}`],
+      ['MODE', car.mode.toUpperCase()],
+      ['DRIFT', `${Math.round((car.beta * 180) / Math.PI)} / ${Math.round((car.betaTarget * 180) / Math.PI)} DEG`],
+      ['ERS', `${car.ersCharge.toFixed(2)} T${car.ersTier}`],
+      ['BOOST', car.boostTier > 0 ? `T${car.boostTier} ${car.boostTimer.toFixed(2)}` : '-'],
     ];
   }
 }
