@@ -18,6 +18,7 @@ const markColor = '#2a2a33';
 /**
  * タイヤ痕 (style-guide.md §5 のレイヤー 10)。車輪の位置を毎フレーム add すると、
  * 直前のフレームの同じ車輪の点と線でつなぎ、2 ドット幅の点列で描く。
+ * 経過時間は update(dt) で数える (ポーズ中に古い痕が消えないように)。
  */
 export class TireMarks {
   private readonly x0 = new Float32Array(capacity);
@@ -32,14 +33,21 @@ export class TireMarks {
   private readonly recentY = new Float32Array(recentCount);
   private readonly recentTime = new Float64Array(recentCount).fill(-Infinity);
   private recentHead = 0;
+  /** update の dt の合計 (秒)。ポーズ中は update を呼ばないので進まない */
+  private time = 0;
 
   constructor(private readonly track: Track) {}
+
+  /** 経過時間を進める。走行中の固定タイムステップの update ごとに呼ぶ (ポーズ中は呼ばない) */
+  update(dt: number): void {
+    this.time += dt;
+  }
 
   /** 車輪の位置 (ワールド座標 px) を追加する。タイヤ痕を出す間、毎フレーム車輪ごとに呼ぶ */
   add(x: number, y: number): void {
     // 壁の中 (ワールドの外を含む) には付けない
     if (this.track.surfaceCodeAt(x, y) === SurfaceCode.wall) return;
-    const now = nowSeconds();
+    const now = this.time;
     // 直前に追加された点のうち、近いもの (= 同じ車輪の前のフレーム) とつなぐ
     let best = -1;
     let bestD = linkDistance * linkDistance;
@@ -71,7 +79,7 @@ export class TireMarks {
   /** カメラが写す範囲のタイヤ痕を描く (コースの後、車の前に呼ぶ) */
   render(layer: WorldLayer): void {
     const ctx = layer.ctx;
-    const now = nowSeconds();
+    const now = this.time;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = markColor;
     for (let n = 0; n < this.count; n++) {
@@ -101,8 +109,4 @@ export class TireMarks {
     this.count = 0;
     this.recentTime.fill(-Infinity);
   }
-}
-
-function nowSeconds(): number {
-  return performance.now() / 1000;
 }

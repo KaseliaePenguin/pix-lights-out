@@ -76,6 +76,12 @@ const gridCell = 2;
 const sdfCell = 4;
 const sdfBand = 48;
 const worldMargin = 240;
+/**
+ * 中心線に沿ってこれより離れた部分同士だけ、間に壁を残す。ヘアピンの内側 (円弧の前後約 50 px) は
+ * 壁を置かずに芝生でつなぎ、エイペックスを攻めたときに壁に当たらないようにする。
+ * 400 にするとヘアピンの内側を芝生で横切る近道 (約 200 px) ができるので、300 にしている
+ */
+const clearanceMinGap = 300;
 
 /**
  * コースデータから、判定・描画に必要なものをすべて作る (DOM に依存しない)。
@@ -535,7 +541,7 @@ export class Track {
         if (vx > 700 || vx < -700 || vy > 700 || vy < -700) continue;
         let dsIdx = Math.abs(i - j);
         dsIdx = Math.min(dsIdx, n - dsIdx);
-        if (dsIdx * this.sampleSpacing < 150) continue;
+        if (dsIdx * this.sampleSpacing < clearanceMinGap) continue;
         const lat = vx * rx + vy * ry;
         const along = vx * fx + vy * fy;
         const absLat = Math.abs(lat);
@@ -693,10 +699,13 @@ export class Track {
     const w = this.gridWidth;
     const h = this.gridHeight;
     const grid = this.surfaceGrid;
+    /** 薄い壁とみなす幅 (マス = 2 px 単位の実際の距離) */
     const reach = 8;
-    // 各方向の直線上で、壁の連続が reach マス以下で両側が走行可能なら「薄い壁」
+    // 各方向の直線上で、壁の連続の長さ (実際の距離) が reach 以下で両側が走行可能なら「薄い壁」。
+    // 斜め方向は 1 歩が √2 マスなので、歩数ではなく距離で比べる (歩数で比べると斜めの厚い壁まで消える)
     const thin = new Uint8Array(w * h);
     const scanLine = (x0: number, y0: number, dx: number, dy: number) => {
+      const stepLength = Math.hypot(dx, dy);
       let runStart = -1;
       let prevDrivable = false;
       let x = x0;
@@ -713,7 +722,7 @@ export class Track {
           }
           cells.push(i);
         } else {
-          if (runStart >= 0 && prevDrivable && cells.length <= reach) for (const c of cells) thin[c] = 1;
+          if (runStart >= 0 && prevDrivable && cells.length * stepLength <= reach) for (const c of cells) thin[c] = 1;
           runStart = -1;
           prevDrivable = true;
         }
