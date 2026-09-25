@@ -320,7 +320,7 @@ export class Car {
     const vEff = Math.min(p.vBase * (1 + bonus), this.speedLimit);
 
     // 5. モードの遷移 (grip → drift)
-    if (this.mode === 'grip') this.checkDriftEntry(active, brake, dt);
+    if (this.mode === 'grip') this.checkDriftEntry(active, brake, steerInput, dt);
 
     // 6. モードごとの更新
     if (this.spinTimer > 0) {
@@ -434,15 +434,17 @@ export class Car {
 
   /**
    * ブレーキ + ハンドル + 速さの条件が driftEnterTime 続いたら、ドリフトに入る (7.1 節)。
+   * ハンドルは平滑化後のステア量ではなく、プレイヤーの入力 (Controls.steerInput) の絶対値で見る
+   * (ハンドルを離した直後にブレーキを踏んだとき、戻りきっていないステア量で入らないように。アナログ入力でも同じ式で使える)。
    * ブレーキを一瞬当てただけで挙動が急に変わらないよう、そろっている時間を見る
    */
-  private checkDriftEntry(active: boolean, brake: number, dt: number): void {
+  private checkDriftEntry(active: boolean, brake: number, steerInput: number, dt: number): void {
     const p = this.params;
     const isReady =
       active &&
       !this.isReversing &&
       brake >= p.driftEnterBrake &&
-      Math.abs(this.steer) >= p.driftEnterSteer &&
+      Math.abs(steerInput) >= p.driftEnterSteer &&
       this.sF >= p.driftEnterSpeed &&
       4 - this.wheelsOffTrack >= 2;
     this.driftEnterHold = isReady ? this.driftEnterHold + dt : 0;
@@ -452,7 +454,10 @@ export class Car {
     const vx = this.vx;
     const vy = this.vy;
     this.mode = 'drift';
-    this.driftDir = this.steer >= 0 ? 1 : -1;
+    this.driftDir = steerInput >= 0 ? 1 : -1;
+    // 入った瞬間に、平滑化後のステア量を入力の値まで進める (ドリフトの向きに限る。逆向きに残っていた分は 0 から)。
+    // 穏やかなステア (steerRise が小さい) でも、入った直後から角度が付き、入りの手応えが出るように
+    this.steer = this.driftDir * Math.max(Math.abs(steerInput), Math.max(0, this.steer * this.driftDir));
     this.driftPhi = Math.atan2(vx, -vy);
     this.driftSpeed = Math.hypot(vx, vy);
     this.beta = p.driftKickAngle;
