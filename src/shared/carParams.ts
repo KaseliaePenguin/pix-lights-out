@@ -198,6 +198,31 @@ export const carParams: Readonly<CarParams> = {
   wheelSide: 8,
 };
 
+/**
+ * 起動時の carParams の複製 (開発時の調整パネルで「既定値に戻す」の基準)。carParams を書き換えても変わらない
+ */
+export const defaultCarParams: Readonly<CarParams> = structuredClone(carParams);
+
+/**
+ * 開発時の調整パネル用: carParams の数値の項目を実行時に書き換える (path は ['latGrip'] や ['surfaces', 'grass', 'grip'])。
+ * Car などは carParams を参照で持っているので、次のフレームから新しい値で走る。
+ * 数値でない項目・存在しない項目は変えずに false を返す
+ */
+export function setCarParam(path: readonly string[], value: number): boolean {
+  if (path.length === 0 || !Number.isFinite(value)) return false;
+  let node: unknown = carParams;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (typeof node !== 'object' || node === null) return false;
+    node = (node as Record<string, unknown>)[path[i]];
+  }
+  if (typeof node !== 'object' || node === null) return false;
+  const record = node as Record<string, unknown>;
+  const key = path[path.length - 1];
+  if (typeof record[key] !== 'number') return false;
+  record[key] = value;
+  return true;
+}
+
 /** レースのルール・判定の数値 (game-design.md 7・10 章) */
 export interface RaceRules {
   /** 固定タイムステップ (秒) */

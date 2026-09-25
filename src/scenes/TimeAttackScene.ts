@@ -1,9 +1,11 @@
 import { ControlsReader } from '../core/ControlsReader';
 import type { EngineSound } from '../core/EngineSound';
+import { TuningStore } from '../core/TuningStore';
 import type { Game } from '../core/Game';
 import type { LoopSound } from '../core/LoopSound';
 import type { Scene } from '../core/Scene';
-import { Camera } from '../core/Camera';
+import { Camera, defaultCameraOptions } from '../core/Camera';
+import type { CameraOptions } from '../core/Camera';
 import { WorldLayer } from '../core/WorldLayer';
 import { Particles } from '../entities/Particles';
 import { drawCar, drawCarOnScreen } from '../render/drawCar';
@@ -12,7 +14,7 @@ import { TrackRenderer } from '../render/TrackRenderer';
 import type { WheelIndex } from '../shared/Car';
 import { computeCarSound, createCarSoundParams, wallImpactEffect } from '../shared/carEffects';
 import type { ImpactEffect } from '../shared/carEffects';
-import { raceRules, recordVersionOf } from '../shared/carParams';
+import { defaultCarParams, raceRules, recordVersionOf, setCarParam } from '../shared/carParams';
 import { createControls } from '../shared/controls';
 import { deserializeGhost, serializeGhost } from '../shared/ghost';
 import type { GhostData } from '../shared/ghost';
@@ -36,6 +38,7 @@ import type { MinimapCar } from '../ui/Minimap';
 import { drawMessageBand } from '../ui/messageBand';
 import { drawText } from '../ui/text';
 import { drawTimingPanel } from '../ui/timingPanel';
+import { TuningPanel } from '../ui/TuningPanel';
 import { MenuScene } from './MenuScene';
 import { PauseScene } from './PauseScene';
 import { loadSettings, saveData } from './settingsStorage';
@@ -45,6 +48,43 @@ import type { CameraMode } from './settingsStorage';
 let cachedTrack: Track | null = null;
 /** ミニマップもコースの形を 1 回だけ描いて使い回す */
 let cachedMinimap: Minimap | null = null;
+
+/**
+ * 開発時の調整パネル (F4) の値。起動中に 1 回だけ作り、シーンを作り直しても同じ値を使う。
+ * カメラの値はシーンごとの Camera に写す (tunedCameraOptions → camera.options)
+ */
+let tuningStore: TuningStore | null = null;
+const tunedCameraOptions: CameraOptions = { ...defaultCameraOptions };
+
+/** carParams の上の階層の項目で、グループが始まるキー (carParams.ts の章の区切り)。ないキーは直前のグループに入る */
+const carParamGroupStarts: Readonly<Record<string, string>> = {
+  vBase: 'longitudinal',
+  steerRise: 'steering',
+  latGrip: 'cornering',
+  squealStart: 'effects',
+  slipBonus: 'slipstream',
+  drsBonus: 'drs',
+  cliffStart: 'tyre wear',
+  restitution: 'contact',
+  pitSpeedLimit: 'pit',
+  hitWidth: 'size',
+};
+
+function getTuningStore(): TuningStore {
+  tuningStore ??= new TuningStore('pix-lights-out.tuning', [
+    { id: 'carParams', label: 'longitudinal', defaults: defaultCarParams, apply: setCarParam, groupStarts: carParamGroupStarts },
+    {
+      id: 'camera',
+      label: 'camera',
+      defaults: defaultCameraOptions,
+      apply: (path, value) => {
+        const key = path[0] as keyof CameraOptions;
+        if (typeof tunedCameraOptions[key] === 'number') tunedCameraOptions[key] = value;
+      },
+    },
+  ]);
+  return tuningStore;
+}
 
 /** コース復帰直後の点滅: 0.125 秒ごとに通常表示とシャドウ表示を入れ替える (style-guide.md §2) */
 const blinkInterval = 0.125;
@@ -81,6 +121,10 @@ export class TimeAttackScene implements Scene {
   private readonly fixedLayer = new WorldLayer();
   private readonly rotatedLayer = new WorldLayer(rotatedLayerSize, rotatedLayerSize);
   private readonly camera = new Camera();
+  /** 開発時だけの調整パネル (本番ビルドでは null で、F4 を無視する) */
+  private readonly tuning: TuningPanel | null = null;
+  /** この走行 (カウントダウンから) の間に調整した値で走ったか。true なら自己ベスト・ゴーストを保存しない */
+  private isRunTuned = false;
   private readonly screenPoint = { x: 0, y: 0 };
   private readonly reader: ControlsReader;
   private readonly controls = createControls();
@@ -102,6 +146,13 @@ export class TimeAttackScene implements Scene {
 
   constructor(private readonly game: Game) {
     this.reader = ControlsReader.withKeyboard(game.input);
+    if (import.meta.env.DEV) {
+      this.tuning = new TuningPanel(getTuningStore(), game.input, () => {
+        this.isRunTuned = true;
+        Object.assign(this.camera.options, tunedCameraOptions);
+      });
+      Object.assign(this.camera.options, tunedCameraOptions);
+    }
     const settings = loadSettings();
     this.isGhostVisible = settings.showGhost;
     this.camera.shakeEnabled = settings.screenShake;
@@ -161,6 +212,7 @@ export class TimeAttackScene implements Scene {
       return;
     }
     if (input.wasPressed('F3')) this.isDebugVisible = !this.isDebugVisible;
+    this.tuning?.update(dt);
 
     const session = this.session;
     this.time += dt;
@@ -264,6 +316,7 @@ export class TimeAttackScene implements Scene {
     this.messages.clear();
     this.camera.snapTo(session.car.x, session.car.y, session.car.heading);
     this.time = 0;
+    this.isRunTuned = tuningStore?.isModified ?? false;
     // コースの生成などで止まっていた時間をまとめて進めない (カウントダウンが短くならないように)
     this.game.resetClock();
   }
@@ -335,6 +388,8 @@ export class TimeAttackScene implements Scene {
   }
 
   private saveRecord(record: TimeAttackRecord): void {
+    // 調整した値で走った記録は、既定の値の記録と比べられないため保存しない
+    if (this.isRunTuned) return;
     saveData.saveBest(record.trackId, record.recordVersion, { bestLap: record.bestLap, bestSectors: record.bestSectors });
     if (record.ghost && record.ghost !== this.savedGhost) {
       saveData.saveGhost(record.trackId, record.recordVersion, serializeGhost(record.ghost));
@@ -509,6 +564,8 @@ export class TimeAttackScene implements Scene {
 
     if (session.phase === 'countdown') drawCountdown(ctx, Math.ceil(session.countdownRemaining - 1e-9));
     if (this.isDebugVisible) drawDebugPanel(ctx, this.debugRows());
+    if (this.isRunTuned) drawText(ctx, 'TUNING', 12, 12, { color: colors.yellow });
+    this.tuning?.render(ctx);
   }
 
   private debugRows(): DebugRow[] {

@@ -31,7 +31,7 @@ export interface CameraOptions {
 }
 
 /** game-design.md 10.5 節の値 */
-const defaultOptions: CameraOptions = {
+export const defaultCameraOptions: Readonly<CameraOptions> = {
   lookAheadTime: 0.4,
   lookAheadMax: 190,
   followRate: 4,
@@ -66,10 +66,11 @@ export class Camera {
   private shakeTimer = 0;
   private offsetX = 0;
   private offsetY = 0;
-  private readonly opt: CameraOptions;
+  /** 追従・回転などの数値。開発時の調整パネルが走行中に書き換える */
+  readonly options: CameraOptions;
 
   constructor(options: Partial<CameraOptions> = {}) {
-    this.opt = { ...defaultOptions, ...options };
+    this.options = { ...defaultCameraOptions, ...options };
   }
 
   /** すぐにその位置へ動かす (スタート前・コース復帰後)。heading を渡すと向きもすぐに合わせる */
@@ -86,7 +87,7 @@ export class Camera {
   get renderAngle(): number {
     if (this.rotation === 'fixed') return 0;
     if (this.rotation === 'step') {
-      const unit = (Math.PI * 2) / this.opt.rotationSteps;
+      const unit = (Math.PI * 2) / this.options.rotationSteps;
       return Math.round(this.angle / unit) * unit;
     }
     return this.angle;
@@ -98,7 +99,7 @@ export class Camera {
    * 注視点は前方 (画面の上) にずらし、追従対象を画面の下寄りに置く
    */
   updateRotating(dt: number, targetX: number, targetY: number, heading: number, speed: number, hold: 'none' | 'slow' | 'freeze'): void {
-    const o = this.opt;
+    const o = this.options;
     if (hold !== 'freeze') {
       const tau = hold === 'slow' ? o.rotationSlowTime : o.rotationTime;
       let diff = (heading - this.angle) % (Math.PI * 2);
@@ -126,7 +127,7 @@ export class Camera {
 
   /** 追従対象の位置と速度から、カメラを 1 フレーム分動かす */
   update(dt: number, targetX: number, targetY: number, vx: number, vy: number): void {
-    const o = this.opt;
+    const o = this.options;
     let ax = vx * o.lookAheadTime;
     let ay = vy * o.lookAheadTime;
     const len = Math.hypot(ax, ay);
@@ -144,7 +145,7 @@ export class Camera {
   }
 
   private updateShake(dt: number): void {
-    const o = this.opt;
+    const o = this.options;
     if (this.shakeTimer > 0) {
       this.shakeTimer = Math.max(0, this.shakeTimer - dt);
       const a = this.shakeAmplitude * (this.shakeTimer / o.shakeTime);
@@ -159,10 +160,10 @@ export class Camera {
   /** 画面揺れ (振幅 px)。強い揺れが来たら差し替える */
   shake(amplitude: number): void {
     if (!this.shakeEnabled) return;
-    const a = Math.min(amplitude, this.opt.shakeMax);
-    if (a < this.shakeAmplitude * (this.shakeTimer / this.opt.shakeTime)) return;
+    const a = Math.min(amplitude, this.options.shakeMax);
+    if (a < this.shakeAmplitude * (this.shakeTimer / this.options.shakeTime)) return;
     this.shakeAmplitude = a;
-    this.shakeTimer = this.opt.shakeTime;
+    this.shakeTimer = this.options.shakeTime;
   }
 
   /** 描画に使う位置 (揺れを含め、2 px = 1 ドット単位に丸めたもの) */
