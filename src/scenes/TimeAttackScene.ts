@@ -25,12 +25,14 @@ import { toKmh } from '../shared/VirtualGearbox';
 import { drawCarStatusPanel } from '../ui/carStatusPanel';
 import { drawCheckpointArrow } from '../ui/checkpointArrow';
 import { drawCountdown } from '../ui/countdown';
-import { colors } from '../ui/colors';
+import { colors, teamColors } from '../ui/colors';
 import { drawDebugPanel } from '../ui/debugPanel';
 import type { DebugRow } from '../ui/debugPanel';
 import { drawGhostDelta } from '../ui/ghostDelta';
 import { hudMessages } from '../ui/hudMessages';
 import { MessageQueue } from '../ui/MessageQueue';
+import { Minimap } from '../ui/Minimap';
+import type { MinimapCar } from '../ui/Minimap';
 import { drawMessageBand } from '../ui/messageBand';
 import { drawText } from '../ui/text';
 import { drawTimingPanel } from '../ui/timingPanel';
@@ -41,6 +43,8 @@ import type { CameraMode } from './settingsStorage';
 
 /** 起動中に 1 回だけ作る (Track の生成は約 0.5 秒かかるため、リスタートやメニューから戻っても使い回す) */
 let cachedTrack: Track | null = null;
+/** ミニマップもコースの形を 1 回だけ描いて使い回す */
+let cachedMinimap: Minimap | null = null;
 
 /** コース復帰直後の点滅: 0.125 秒ごとに通常表示とシャドウ表示を入れ替える (style-guide.md §2) */
 const blinkInterval = 0.125;
@@ -86,6 +90,7 @@ export class TimeAttackScene implements Scene {
   private readonly impact: ImpactEffect = { sound: null, volume: 0, shake: 0, sparks: 0 };
   private readonly ghostPose: Pose = { x: 0, y: 0, heading: 0 };
   private readonly wheel = { x: 0, y: 0 };
+  private readonly minimapCars: MinimapCar[] = [];
   private sounds: DriveSounds | null = null;
 
   private pause: PauseScene | null = null;
@@ -225,6 +230,7 @@ export class TimeAttackScene implements Scene {
   private build(): void {
     cachedTrack ??= new Track(course1);
     const track = cachedTrack;
+    cachedMinimap ??= new Minimap(track);
     this.renderer = new TrackRenderer(track, this.game.assets);
     // 最初のフレームの引っかかりを減らすため、開始位置のまわりを先に塗っておく
     this.renderer.prepare(track.soloStart.x, track.soloStart.y);
@@ -493,6 +499,14 @@ export class TimeAttackScene implements Scene {
       const angle = Math.atan2((gate.ay + gate.by) / 2 - car.y, (gate.ax + gate.bx) / 2 - car.x) - this.camera.renderAngle;
       drawCheckpointArrow(ctx, angle);
     }
+    // ミニマップ: ゴースト → 自車の順に描く (自車を上にする)
+    this.minimapCars.length = 0;
+    if (this.isGhostVisible && session.ghostPose(this.ghostPose)) {
+      this.minimapCars.push({ x: this.ghostPose.x, y: this.ghostPose.y, color: teamColors[1], isGhost: true });
+    }
+    this.minimapCars.push({ x: car.x, y: car.y, color: teamColors[1], isSelf: true });
+    cachedMinimap?.draw(ctx, this.minimapCars);
+
     if (session.phase === 'countdown') drawCountdown(ctx, Math.ceil(session.countdownRemaining - 1e-9));
     if (this.isDebugVisible) drawDebugPanel(ctx, this.debugRows());
   }
