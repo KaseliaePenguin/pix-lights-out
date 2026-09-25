@@ -8,8 +8,11 @@ import type { Pose } from './Track';
  * 保存形式は JSON にそのまま入れられる形 (frames は Int16 の base64)。
  */
 export interface GhostData {
-  /** 2: フレームにドリフト・ブーストのフラグを足した形 (第 4 版) */
-  formatVersion: 2;
+  /**
+   * 1: [x, y, 向き] / 2: ドリフト・ブーストのフラグを足した形 (ドリフトをやめたので使わない) /
+   * 3: [x, y, 向き] に戻した形 (形は 1 と同じ。物理が違うので番号を分ける)
+   */
+  formatVersion: 3;
   /** 記録したときの物理のバージョン。今と違えば破棄する */
   physicsVersion: number;
   trackId: string;
@@ -19,7 +22,7 @@ export interface GhostData {
   /** 記録の頻度 (回/秒) */
   rate: number;
   frameCount: number;
-  /** [x×2, y×2, 向き, フラグ] × frameCount を Int16 にして base64 にしたもの。フラグは ghostFlags を参照 */
+  /** [x×2, y×2, 向き] × frameCount を Int16 にして base64 にしたもの */
   frames: string;
   /** タイミングラインごとの通過タイム (ゴースト差の表示に使う) */
   splits: number[];
@@ -28,30 +31,15 @@ export interface GhostData {
 }
 
 const angleScale = 32767 / Math.PI;
-/** 1 フレームの値の数 (x, y, 向き, フラグ) */
-const frameStride = 4;
-
-/**
- * ゴーストのフレームのフラグ (スモークやブーストの光を再生するため。car-physics.md 20 節)。
- * bit 0 = ドリフト中、bit 1-2 = ブーストの段階 (0〜3)
- */
-export const ghostFlags = {
-  drift: 1,
-  boostShift: 1,
-  boostMask: 0b110,
-} as const;
-
-/** 車の状態からフラグを作る */
-export function makeGhostFlags(isDrifting: boolean, boostTier: number): number {
-  return (isDrifting ? ghostFlags.drift : 0) | ((Math.max(0, Math.min(3, boostTier)) << ghostFlags.boostShift) & ghostFlags.boostMask);
-}
+/** 1 フレームの値の数 (x, y, 向き) */
+const frameStride = 3;
 
 /** ゴーストが今の物理・コースで使えるか */
 export function isGhostCompatible(data: unknown, trackId: string, trackVersion: number): data is GhostData {
   if (typeof data !== 'object' || data === null) return false;
   const g = data as Partial<GhostData>;
   return (
-    g.formatVersion === 2 &&
+    g.formatVersion === 3 &&
     g.physicsVersion === physicsVersion &&
     g.trackId === trackId &&
     g.trackVersion === trackVersion &&
@@ -115,8 +103,8 @@ export class GhostRecorder {
     this.active = true;
   }
 
-  /** 毎フレーム (車の update の後) に呼ぶ。flags は makeGhostFlags の値 */
-  record(lapTime: number, x: number, y: number, heading: number, flags = 0): void {
+  /** 毎フレーム (車の update の後) に呼ぶ */
+  record(lapTime: number, x: number, y: number, heading: number): void {
     if (!this.active) return;
     const span = lapTime - this.prevTime;
     while (this.nextTime <= lapTime && span > 0) {
@@ -125,7 +113,6 @@ export class GhostRecorder {
         Math.round((this.prevX + (x - this.prevX) * t) * 2),
         Math.round((this.prevY + (y - this.prevY) * t) * 2),
         Math.round(wrapAngle(lerpAngle(this.prevH, heading, t)) * angleScale),
-        flags,
       );
       this.nextTime += this.interval;
     }
@@ -146,7 +133,7 @@ export class GhostRecorder {
     const arr = new Int16Array(this.values.length);
     for (let i = 0; i < this.values.length; i++) arr[i] = Math.max(-32768, Math.min(32767, this.values[i]));
     return {
-      formatVersion: 2,
+      formatVersion: 3,
       physicsVersion,
       trackId,
       trackVersion,
@@ -186,14 +173,6 @@ export class GhostPlayer {
     out.y = (this.frames[a + 1] + (this.frames[b + 1] - this.frames[a + 1]) * t) / 2;
     out.heading = lerpAngle(this.frames[a + 2] / angleScale, this.frames[b + 2] / angleScale, t);
     return true;
-  }
-
-  /** lapTime の時点のフラグ (makeGhostFlags の値。範囲外は 0) */
-  sampleFlags(lapTime: number): number {
-    const count = Math.min(this.data.frameCount, Math.floor(this.frames.length / frameStride));
-    if (lapTime < 0 || count === 0 || lapTime > this.data.lapTime) return 0;
-    const i = Math.min(Math.round(lapTime * this.data.rate), count - 1);
-    return this.frames[i * frameStride + 3];
   }
 
   /** タイミングライン index を lapTime で通過したときのゴースト差 (負 = ゴーストより速い)。記録がなければ null */

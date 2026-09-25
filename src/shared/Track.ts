@@ -1,7 +1,7 @@
 import type { SurfaceKind } from './carParams';
 import { raceRules } from './carParams';
 import { segmentIntersection } from './math';
-import type { CornerStyle, RunoffSpec, TrackData, TrackRef, TurnSegment } from './trackData';
+import type { RunoffSpec, TrackData, TrackRef, TurnSegment } from './trackData';
 
 /**
  * 路面コード (判定用グリッドの 1 マス = 2 px = 1 ドット)。値が大きいほど重なったときに優先される。
@@ -67,7 +67,6 @@ export interface WallContact {
 /** コーナー (円弧のセグメント) の情報 */
 export interface CornerInfo {
   readonly id: string;
-  readonly style: CornerStyle;
   /** 円弧の始まりと終わり (中心線上の s) */
   readonly s0: number;
   readonly s1: number;
@@ -198,7 +197,6 @@ export class Track {
     const innerLimitR = new Float64Array(n).fill(Infinity);
     this.corners = raw.turns.map((t, i) => ({
       id: t.seg.id ?? `turn${i + 1}`,
-      style: t.seg.style ?? 'either',
       s0: t.s0,
       s1: t.s1,
       angle: (t.seg.angle * Math.PI) / 180,

@@ -4,8 +4,8 @@
  * ゴースト・自己ベストは、両方の組 (recordVersionOf) が保存時と違えば破棄する。
  */
 
-/** 物理のバージョン番号。CarParams・路面テーブル・当たり判定の計算を変えたら上げる (2: car-physics.md 第 4 版) */
-export const physicsVersion = 2;
+/** 物理のバージョン番号。CarParams・路面テーブル・当たり判定の計算を変えたら上げる (2: 第 4 版、3: 第 4 版からドリフト・ERS を除いた版) */
+export const physicsVersion = 3;
 
 /**
  * 自己ベスト・ゴーストが今のゲームで使えるかを表す文字列 (`物理のバージョン-コースのバージョン`)。
@@ -43,7 +43,7 @@ export interface CarParams {
   reverseDelay: number;
   /** 後退に入れる速度の上限 (sF がこれ以下) */
   reverseEnterSpeed: number;
-  /** 最高速の上乗せ (スリップストリーム + DRS + ブースト) の合計の上限 */
+  /** 最高速の上乗せ (スリップストリーム + DRS) の合計の上限 */
   bonusCap: number;
   // 4 節: ステア
   steerRise: number;
@@ -66,50 +66,6 @@ export interface CarParams {
   visualSlipStart: number;
   visualSlipGain: number;
   visualSlipMax: number;
-  // 7 節: ドリフト
-  driftEnterBrake: number;
-  driftEnterSteer: number;
-  driftEnterSpeed: number;
-  /** ブレーキ・ハンドル・速さの条件がこの時間そろい続けたらドリフトに入る (一瞬のブレーキで急に滑らないように) */
-  driftEnterTime: number;
-  driftKickAngle: number;
-  driftAngleNeutral: number;
-  driftAngleIn: number;
-  driftAngleThrottle: number;
-  driftAngleBrake: number;
-  driftBrakeGrace: number;
-  driftReleaseTime: number;
-  driftAngleResponse: number;
-  driftLatLow: number;
-  driftLatHigh: number;
-  driftGainSpeedLow: number;
-  driftGainSpeedHigh: number;
-  driftAngleRef: number;
-  driftLatMaxFactor: number;
-  driftDrag: number;
-  driftThrottleMul: number;
-  driftBrakeMul: number;
-  driftExitAngle: number;
-  driftExitTime: number;
-  driftMinSpeed: number;
-  /** コース外の車輪がこの数以上でドリフトが終わる */
-  driftExitOffWheels: number;
-  /** この強さ以上の衝撃でドリフトが終わる (px/秒) */
-  driftExitImpulse: number;
-  // 9 節: ドリフトのやりすぎによるスピン
-  driftSpinAngle: number;
-  driftSpinTime: number;
-  /** スピンの兆候を見せる角度 (16 節) */
-  driftSpinWarnAngle: number;
-  // 8 節: ERS とブースト
-  ersMinAngle: number;
-  ersMaxOffWheels: number;
-  /** 段階 1〜3 になる溜まり (秒) */
-  ersTierTime: number[];
-  /** 段階 1〜3 のブーストの追加の加速 (px/秒²)・最高速の上乗せ・続く時間 (秒) */
-  boostAccel: number[];
-  boostTop: number[];
-  boostTime: number[];
   // 10 節: 路面
   surfaces: Readonly<Record<SurfaceKind, SurfaceParams>>;
   // 16 節: 演出
@@ -119,19 +75,10 @@ export interface CarParams {
   squealRateMin: number;
   squealRateGain: number;
   squealFadeTime: number;
-  /** ドリフト中のスキール音: 基本の音量。driftSquealAngle の角度で最大になる */
-  driftSquealBase: number;
-  driftSquealAngle: number;
   skidMarkUReq: number;
   skidMarkMinSpeed: number;
-  /** ドリフト中、この角度以上で前輪からもタイヤ痕 */
-  driftFrontMarkAngle: number;
   lockupMarkTime: number;
   lockupMinSpeed: number;
-  /** ドリフトのスモーク: 速度の下限と、量の基準 (beta / smokeAngleRef × s / smokeSpeedRef) */
-  smokeMinSpeed: number;
-  smokeAngleRef: number;
-  smokeSpeedRef: number;
   // 13 節: スリップストリーム (M2 で使う。M1 では fSlip は常に 0)
   slipBonus: number;
   slipRange: number;
@@ -150,7 +97,6 @@ export interface CarParams {
   cliffStart: number;
   wearSlope: number;
   cliffSlope: number;
-  driftWearLoad: number;
   // 11 節: 接触
   restitution: number;
   attackerMargin: number;
@@ -164,7 +110,7 @@ export interface CarParams {
   spinImpulseCar: number;
   spinImpulseWall: number;
   spinWallMinAngle: number;
-  // 9 節: スピン (短い = ドリフト・壁、長い = 車同士の接触)
+  // 9 節: スピン (短い = 壁への強い衝突、長い = 車同士の接触)
   spinTimeLight: number;
   spinYawLight: number;
   spinDecelLight: number;
@@ -185,9 +131,9 @@ export interface CarParams {
 const deg = Math.PI / 180;
 
 /**
- * car-physics.md 第 4 版の初期値。ただし brakeDecel・steerRise・yawMaxLow は、ユーザーが調整パネルで選んだ値。
- * ユーザーの「緩やかな操作」に合わせて steerReturn・driftKickAngle・driftAngleResponse・driftReleaseTime も調整し、
- * driftEnterTime を足した (仕様の値は specCarParamValues)。調整パネルがこのオブジェクトを書き換えるので、車は毎フレームここを読む
+ * car-physics.md 第 4 版の初期値 (ドリフト・ERS ブーストは除いた)。ただし brakeDecel・steerRise・yawMaxLow は、
+ * ユーザーが調整パネルで選んだ値。ユーザーの「緩やかな操作」に合わせて steerReturn も穏やかにした (仕様の値は specCarParamValues)。
+ * 調整パネルがこのオブジェクトを書き換えるので、車は毎フレームここを読む
  */
 export const carParams: Readonly<CarParams> = {
   vBase: 525,
@@ -217,41 +163,6 @@ export const carParams: Readonly<CarParams> = {
   visualSlipStart: 0.9,
   visualSlipGain: 25 * deg,
   visualSlipMax: 6 * deg,
-  driftEnterBrake: 0.3,
-  driftEnterSteer: 0.5,
-  driftEnterSpeed: 200,
-  driftEnterTime: 0.08,
-  driftKickAngle: 5 * deg,
-  driftAngleNeutral: 20 * deg,
-  driftAngleIn: 45 * deg,
-  driftAngleThrottle: 5 * deg,
-  driftAngleBrake: 12 * deg,
-  driftBrakeGrace: 0.4,
-  driftReleaseTime: 0.3,
-  driftAngleResponse: 6,
-  driftLatLow: 1.25,
-  driftLatHigh: 0.75,
-  driftGainSpeedLow: 250,
-  driftGainSpeedHigh: 450,
-  driftAngleRef: 40 * deg,
-  driftLatMaxFactor: 1.25,
-  driftDrag: 260,
-  driftThrottleMul: 0.85,
-  driftBrakeMul: 0.5,
-  driftExitAngle: 6 * deg,
-  driftExitTime: 0.1,
-  driftMinSpeed: 120,
-  driftExitOffWheels: 3,
-  driftExitImpulse: 187.5,
-  driftSpinAngle: 52 * deg,
-  driftSpinTime: 0.35,
-  driftSpinWarnAngle: 48 * deg,
-  ersMinAngle: 15 * deg,
-  ersMaxOffWheels: 2,
-  ersTierTime: [0.5, 1.1, 1.8],
-  boostAccel: [150, 200, 250],
-  boostTop: [0.04, 0.06, 0.08],
-  boostTime: [0.5, 0.8, 1.1],
   surfaces: {
     asphalt: { grip: 1.0, brake: 1.0, accel: 1.0, speedCap: Infinity, capDecel: 0, isOffTrack: false },
     kerb: { grip: 0.97, brake: 0.95, accel: 1.0, speedCap: Infinity, capDecel: 0, isOffTrack: false },
@@ -265,16 +176,10 @@ export const carParams: Readonly<CarParams> = {
   squealRateMin: 0.9,
   squealRateGain: 0.25,
   squealFadeTime: 0.15,
-  driftSquealBase: 0.6,
-  driftSquealAngle: 45 * deg,
   skidMarkUReq: 1.0,
   skidMarkMinSpeed: 187.5,
-  driftFrontMarkAngle: 25 * deg,
   lockupMarkTime: 0.25,
   lockupMinSpeed: 375,
-  smokeMinSpeed: 150,
-  smokeAngleRef: 45 * deg,
-  smokeSpeedRef: 400,
   slipBonus: 0.08,
   slipRange: 150,
   slipRearOffset: 19,
@@ -290,7 +195,6 @@ export const carParams: Readonly<CarParams> = {
   cliffStart: 0.7,
   wearSlope: 0.08,
   cliffSlope: 0.5,
-  driftWearLoad: 1.3,
   restitution: 0.2,
   attackerMargin: 25,
   attackerLossMax: 0.3,
@@ -324,9 +228,6 @@ export const specCarParamValues: Readonly<Partial<CarParams>> = {
   steerRise: 15,
   steerReturn: 20,
   yawMaxLow: 3.6,
-  driftKickAngle: 8 * deg,
-  driftAngleResponse: 8,
-  driftReleaseTime: 0.4,
 };
 
 /**

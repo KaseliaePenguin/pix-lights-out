@@ -13,14 +13,8 @@ export interface CarEnvironment {
 /** 車輪の番号: 0 = 左前、1 = 右前、2 = 左後、3 = 右後 */
 export type WheelIndex = 0 | 1 | 2 | 3;
 
-/** grip = グリップ走行、drift = ドリフト、spin = スピン (操作不能) */
-export type CarMode = 'grip' | 'drift' | 'spin';
-
-/**
- * ドリフトの終わり方 (car-physics.md 7.4 節)。clean・slow はブーストが出る。
- * offTrack・impact・spin・forced (コース復帰・置き直しなど) は溜めた ERS を失う
- */
-export type DriftEndReason = 'clean' | 'slow' | 'offTrack' | 'impact' | 'spin' | 'forced';
+/** grip = グリップ走行、spin = スピン (操作不能) */
+export type CarMode = 'grip' | 'spin';
 
 // 当たり判定の外周の点 (車の座標系: 右 = +x、前 = +y)。長方形 18×38 の角と辺の途中
 const outlineLocal: readonly (readonly [number, number])[] = [
@@ -29,15 +23,9 @@ const outlineLocal: readonly (readonly [number, number])[] = [
   [0, 19], [0, -19],
 ];
 
-/** ドリフト中、進行方向の曲がり具合を計算するときの速さの下限 (px/秒。止まりかけで向きが急に変わらないように) */
-const driftTurnMinSpeed = 60;
-/** ハンドルを「離している」とみなすステア量 */
-const steerReleaseThreshold = 0.1;
-/** カメラの回転の基準で、ドリフト角のうち足す割合 (game-design.md 10.5 節) */
-const cameraDriftShare = 0.35;
 
 /**
- * 車 1 台の物理 (car-physics.md 第 4 版)。DOM に依存しない。
+ * 車 1 台の物理 (car-physics.md 第 4 版からドリフト・ERS ブーストを除いたもの)。DOM に依存しない。
  * 毎フレーム update(controls, dt) を呼ぶ。パラメータは params (既定は carParams) を毎フレーム読むので、
  * 調整パネルで carParams を書き換えると次のフレームから効く。
  * スリップストリーム (fSlip)・タイヤ摩耗・車同士の接触は M2 以降。
@@ -48,23 +36,10 @@ export class Car {
   y = 0;
   /** 車体の向き θ (0 = 北、時計回りが正) */
   heading = 0;
-  /** 車体から見た前方向・右方向の速度 (drift モードでも速度ベクトルから計算し直して持つ) */
+  /** 車体から見た前方向・右方向の速度 */
   sF = 0;
   sR = 0;
   mode: CarMode = 'grip';
-  /** ドリフトの向き (+1 = 右に曲がるドリフト、-1 = 左) */
-  driftDir = 1;
-  /** ドリフト角 (0 以上、rad) と目標角 */
-  beta = 0;
-  betaTarget = 0;
-  /** ドリフトに入ってからの時間 */
-  driftTime = 0;
-  /** このドリフトで溜めた ERS (秒) と段階 0〜3 */
-  ersCharge = 0;
-  ersTier = 0;
-  /** 出ているブーストの段階 (0 = なし) と残り時間 */
-  boostTier = 0;
-  boostTimer = 0;
   steer = 0;
   fSlip = 0;
   fDrs = 0;
@@ -100,7 +75,7 @@ export class Car {
   wheelsOffTrack = 0;
   /** 縁石に乗っている車輪の数 */
   wheelsOnKerb = 0;
-  /** 描画用の向き (grip では滑り角を足したもの。drift・spin では車体の向きそのもの) */
+  /** 描画用の向き (grip では滑り角を足したもの。spin では車体の向きそのもの) */
   drawHeading = 0;
   /** スキール音の目標の音量 0〜1 と再生速度 (16 節)。フェードは音の側で行う */
   squealVolume = 0;
@@ -108,10 +83,6 @@ export class Car {
   /** タイヤ痕を出すか: 後輪・前輪 */
   skidRear = false;
   skidFront = false;
-  /** タイヤスモークの量 0〜1 (1 = 1 輪あたり 0.05 秒に 1 個。16 節) */
-  smokeAmount = 0;
-  /** ドリフト中にスピンが近い (beta が driftSpinWarnAngle 以上。車体を揺らして見せる) */
-  isSpinWarning = false;
   /** このフレームでフルブレーキのタイヤ痕が始まった (tire-lockup を 1 回鳴らす) */
   lockupStarted = false;
   /** このフレームの壁との衝撃の強さ J (px/秒、0 なら衝突なし) と接触点 */
@@ -125,27 +96,11 @@ export class Car {
   /** このフレームで DRS が開いた / 閉じた */
   drsOpened = false;
   drsClosed = false;
-  /** このフレームでドリフトに入った / 終わった (終わり方は driftEndReason) */
-  driftStarted = false;
-  driftEnded = false;
-  driftEndReason: DriftEndReason = 'clean';
-  /** このフレームで ERS の段階が上がった (新しい段階は ersTier) */
-  ersTierUp = false;
-  /** このフレームでブーストが出た (段階は boostTier) */
-  boostStarted = false;
   /** 後退モード中 */
   isReversing = false;
 
   private reverseHold = 0;
   private fullBrakeTime = 0;
-  /** ドリフトに入る条件 (ブレーキ + ハンドル + 速さ) がそろっている時間 */
-  private driftEnterHold = 0;
-  /** ドリフト中: 進行方向 φ と速さ */
-  private driftPhi = 0;
-  private driftSpeed = 0;
-  private releaseTimer = 0;
-  private exitTimer = 0;
-  private overSpinTimer = 0;
   private spinDuration = 1;
   private spinRate0 = 0;
   private spinDecelNow = 0;
@@ -167,10 +122,6 @@ export class Car {
     return this.spinTimer > 0;
   }
 
-  get isDrifting(): boolean {
-    return this.mode === 'drift';
-  }
-
   /** 速度ベクトル */
   get vx(): number {
     if (this.spinTimer > 0) return this.spinVx;
@@ -180,20 +131,6 @@ export class Car {
   get vy(): number {
     if (this.spinTimer > 0) return this.spinVy;
     return -Math.cos(this.heading) * this.sF + Math.sin(this.heading) * this.sR;
-  }
-
-  /**
-   * カメラの回転の基準にする向き (game-design.md 10.5 節)。grip では車体の向き、
-   * ドリフト中は「進行方向 + ドリフト角 × 0.35」(車が画面上で斜めを向いて見えるように)
-   */
-  get cameraHeading(): number {
-    if (this.mode === 'drift') return this.driftPhi + this.driftDir * this.beta * cameraDriftShare;
-    return this.heading;
-  }
-
-  /** ドリフトの進行方向 φ (drift モード以外は車体の向き) */
-  get travelHeading(): number {
-    return this.mode === 'drift' ? this.driftPhi : this.heading;
   }
 
   /** 位置・向きを置き直し、速度などを 0 にする (スタート・コース復帰) */
@@ -211,21 +148,12 @@ export class Car {
     this.drsOpen = false;
     this.spinTimer = 0;
     this.mode = 'grip';
-    this.beta = 0;
-    this.betaTarget = 0;
-    this.ersCharge = 0;
-    this.ersTier = 0;
-    this.boostTier = 0;
-    this.boostTimer = 0;
-    this.driftEnterHold = 0;
     this.isReversing = false;
     this.reverseHold = 0;
     this.fullBrakeTime = 0;
     this.uReq = 0;
     this.yawRate = 0;
     this.squealVolume = 0;
-    this.smokeAmount = 0;
-    this.isSpinWarning = false;
     this.closedOutsideUpdate = false;
   }
 
@@ -268,10 +196,6 @@ export class Car {
     this.drsOpened = false;
     this.drsClosed = this.closedOutsideUpdate;
     this.closedOutsideUpdate = false;
-    this.driftStarted = false;
-    this.driftEnded = false;
-    this.ersTierUp = false;
-    this.boostStarted = false;
     this.isUpdating = true;
 
     // 1. 入力 (スピン中・操作不能中は無視する。ブレーキ優先)
@@ -294,7 +218,7 @@ export class Car {
     let surfaceDecel = 0;
     this.wheelsOffTrack = 0;
     this.wheelsOnKerb = 0;
-    const speedNow = this.mode === 'drift' ? this.driftSpeed : Math.abs(this.sF);
+    const speedNow = Math.abs(this.sF);
     for (let i = 0; i < 4; i++) {
       this.wheelPosition(i as WheelIndex, tmpPoint);
       const kind = this.env.surfaceAt(tmpPoint.x, tmpPoint.y);
@@ -315,34 +239,19 @@ export class Car {
     const drsGrip = 1 - (1 - p.drsGripMul) * this.fDrs;
     this.grip = tyre * surfaceGrip * (1 - p.brakeGripLoss * brake) * drsGrip;
     this.brakeGrip = tyre * (brakeSum / 4);
-    const boostTop = this.boostTier > 0 ? p.boostTop[this.boostTier - 1] ?? 0 : 0;
-    const bonus = Math.min(p.bonusCap, p.slipBonus * this.fSlip + p.drsBonus * this.fDrs + boostTop);
+    const bonus = Math.min(p.bonusCap, p.slipBonus * this.fSlip + p.drsBonus * this.fDrs);
     const vEff = Math.min(p.vBase * (1 + bonus), this.speedLimit);
 
-    // 5. モードの遷移 (grip → drift)
-    if (this.mode === 'grip') this.checkDriftEntry(active, brake, steerInput, dt);
-
-    // 6. モードごとの更新
-    if (this.spinTimer > 0) {
-      this.updateSpin(dt);
-    } else if (this.mode === 'drift') {
-      this.updateDrift(throttle, brake, tyre * surfaceGrip, surfaceAccel, surfaceDecel, vEff, dt);
-    } else {
-      this.updateGrip(throttle, brake, controls, surfaceAccel, surfaceDecel, surfaceGrip, vEff, active, dt);
-    }
-
-    // 7. ブーストの残り時間 (8 節)。ブレーキを踏むとその場で終わる
-    if (this.boostTier > 0) {
-      this.boostTimer -= dt;
-      if (this.boostTimer <= 0 || brake > 0 || this.mode !== 'grip') this.endBoost();
-    }
+    // 5. モードごとの更新
+    if (this.spinTimer > 0) this.updateSpin(dt);
+    else this.updateGrip(throttle, brake, controls, surfaceAccel, surfaceDecel, surfaceGrip, vEff, active, dt);
 
     // 9. 壁との衝突 (11.2 節)
     this.resolveWalls(dt);
 
-    // 14 節: DRS (開くのは区間内でボタンを押したとき。閉じるのはブレーキ・スピン。ドリフト中は開けない)
+    // 14 節: DRS (開くのは区間内でボタンを押したとき。閉じるのはブレーキ・スピン)
     if (this.drsOpen && (brake > 0 || this.spinTimer > 0)) this.closeDrs();
-    else if (!this.drsOpen && active && this.mode === 'grip' && this.drsAvailable && controls.drsPressed) {
+    else if (!this.drsOpen && active && this.drsAvailable && controls.drsPressed) {
       this.drsOpen = true;
       this.drsOpened = true;
     }
@@ -419,158 +328,13 @@ export class Car {
     const s = Math.max(this.sF, 0);
     const ratio = s / vEff;
     const aEngine = throttle * p.accel0 * surfaceAccel * (1 - ratio * ratio);
-    const aBoost = this.boostTier > 0 && s < vEff ? p.boostAccel[this.boostTier - 1] ?? 0 : 0;
     const aBrake = brake * p.brakeDecel * this.brakeGrip;
     const coastRatio = s / p.vBase;
     const aCoast = (1 - throttle) * (p.coastBase + p.coastDrag * coastRatio * coastRatio);
     const resist = aBrake + aCoast + this.scrubDecel + surfaceDecel;
-    this.sF += (aEngine + aBoost) * dt;
+    this.sF += aEngine * dt;
     // 抵抗は 0 をまたがない (後退には後退の操作でのみ入る)
     this.sF = approach(this.sF, 0, resist * dt);
-  }
-
-  // ------------------------------------------------------------------
-  // drift モード (7 節)
-
-  /**
-   * ブレーキ + ハンドル + 速さの条件が driftEnterTime 続いたら、ドリフトに入る (7.1 節)。
-   * ハンドルは平滑化後のステア量ではなく、プレイヤーの入力 (Controls.steerInput) の絶対値で見る
-   * (ハンドルを離した直後にブレーキを踏んだとき、戻りきっていないステア量で入らないように。アナログ入力でも同じ式で使える)。
-   * ブレーキを一瞬当てただけで挙動が急に変わらないよう、そろっている時間を見る
-   */
-  private checkDriftEntry(active: boolean, brake: number, steerInput: number, dt: number): void {
-    const p = this.params;
-    const isReady =
-      active &&
-      !this.isReversing &&
-      brake >= p.driftEnterBrake &&
-      Math.abs(steerInput) >= p.driftEnterSteer &&
-      this.sF >= p.driftEnterSpeed &&
-      4 - this.wheelsOffTrack >= 2;
-    this.driftEnterHold = isReady ? this.driftEnterHold + dt : 0;
-    if (!isReady || this.driftEnterHold < p.driftEnterTime) return;
-
-    this.driftEnterHold = 0;
-    const vx = this.vx;
-    const vy = this.vy;
-    this.mode = 'drift';
-    this.driftDir = steerInput >= 0 ? 1 : -1;
-    // 入った瞬間に、平滑化後のステア量を入力の値まで進める (ドリフトの向きに限る。逆向きに残っていた分は 0 から)。
-    // 穏やかなステア (steerRise が小さい) でも、入った直後から角度が付き、入りの手応えが出るように
-    this.steer = this.driftDir * Math.max(Math.abs(steerInput), Math.max(0, this.steer * this.driftDir));
-    this.driftPhi = Math.atan2(vx, -vy);
-    this.driftSpeed = Math.hypot(vx, vy);
-    this.beta = p.driftKickAngle;
-    this.betaTarget = p.driftKickAngle;
-    this.driftTime = 0;
-    this.ersCharge = 0;
-    this.ersTier = 0;
-    this.releaseTimer = 0;
-    this.exitTimer = 0;
-    this.overSpinTimer = 0;
-    this.driftStarted = true;
-    this.heading = this.driftPhi + this.driftDir * this.beta;
-    this.syncFromDrift();
-    this.closeDrs();
-  }
-
-  private updateDrift(
-    throttle: number, brake: number, gripD: number, surfaceAccel: number, surfaceDecel: number, vEff: number, dt: number,
-  ): void {
-    const p = this.params;
-    this.driftTime += dt;
-
-    // ドリフト角の目標 (7.2 節)
-    const u = this.steer * this.driftDir;
-    this.releaseTimer = Math.abs(this.steer) < steerReleaseThreshold ? this.releaseTimer + dt : 0;
-    let target: number;
-    if (this.releaseTimer >= p.driftReleaseTime) target = 0;
-    else if (u >= 0) target = p.driftAngleNeutral + (p.driftAngleIn - p.driftAngleNeutral) * u;
-    else target = p.driftAngleNeutral * (1 + u);
-    target += throttle * p.driftAngleThrottle;
-    if (this.driftTime >= p.driftBrakeGrace) target += brake * p.driftAngleBrake;
-    this.betaTarget = target;
-    const prevHeading = this.heading;
-    this.beta += (target - this.beta) * Math.min(1, p.driftAngleResponse * dt);
-    if (this.beta < 0) this.beta = 0;
-
-    // 進み方 (7.3 節)
-    const s = this.driftSpeed;
-    const gain = driftGain(p, s);
-    const aLat = p.latGrip * gripD * gain * Math.min(this.beta / p.driftAngleRef, p.driftLatMaxFactor);
-    this.driftPhi += (this.driftDir * aLat / Math.max(s, driftTurnMinSpeed)) * dt;
-    const ratio = s / vEff;
-    const aEngine = throttle * p.accel0 * surfaceAccel * p.driftThrottleMul * (1 - ratio * ratio);
-    const aDrag = p.driftDrag * Math.sin(this.beta);
-    const aBrake = brake * p.brakeDecel * this.brakeGrip * p.driftBrakeMul;
-    const coastRatio = s / p.vBase;
-    const aCoast = (1 - throttle) * (p.coastBase + p.coastDrag * coastRatio * coastRatio);
-    this.driftSpeed = Math.max(0, s + (aEngine - aDrag - aBrake - aCoast - surfaceDecel) * dt);
-    this.heading = this.driftPhi + this.driftDir * this.beta;
-    this.yawRate = wrapAngle(this.heading - prevHeading) / dt;
-    this.uReq = 0;
-    this.scrubDecel = 0;
-    this.syncFromDrift();
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-
-    // ERS の溜まり (8.1 節)
-    if (this.beta >= p.ersMinAngle && this.wheelsOffTrack <= p.ersMaxOffWheels) {
-      this.ersCharge += dt;
-      const tier = ersTierOf(p, this.ersCharge);
-      if (tier > this.ersTier) {
-        this.ersTier = tier;
-        this.ersTierUp = true;
-      }
-    }
-
-    // やりすぎのスピン (9.1 節)
-    this.overSpinTimer = this.beta >= p.driftSpinAngle ? this.overSpinTimer + dt : 0;
-    if (this.overSpinTimer >= p.driftSpinTime) {
-      this.endDrift('spin');
-      this.startSpin('light', this.driftDir);
-      return;
-    }
-
-    // 抜け方 (7.4 節)
-    this.exitTimer = this.beta < p.driftExitAngle ? this.exitTimer + dt : 0;
-    if (this.wheelsOffTrack >= p.driftExitOffWheels) this.endDrift('offTrack');
-    else if (this.exitTimer >= p.driftExitTime) this.endDrift('clean');
-    else if (this.driftSpeed < p.driftMinSpeed) this.endDrift('slow');
-    else if (this.controlLocked) this.endDrift('forced');
-  }
-
-  /** ドリフトの速度 (φ・速さ) から sF・sR を計算し直す (接触・壁の処理を共通にするため) */
-  private syncFromDrift(): void {
-    const vx = Math.sin(this.driftPhi) * this.driftSpeed;
-    const vy = -Math.cos(this.driftPhi) * this.driftSpeed;
-    const s = Math.sin(this.heading);
-    const c = Math.cos(this.heading);
-    this.sF = vx * s - vy * c;
-    this.sR = vx * c + vy * s;
-  }
-
-  /** ドリフトを終えて grip モードに戻る。きれいに抜けた (または遅くなって抜けた) ならブーストを出す */
-  private endDrift(reason: DriftEndReason): void {
-    if (this.mode !== 'drift') return;
-    const p = this.params;
-    this.mode = 'grip';
-    this.driftEnded = true;
-    this.driftEndReason = reason;
-    this.beta = 0;
-    this.betaTarget = 0;
-    if ((reason === 'clean' || reason === 'slow') && this.ersTier > 0) {
-      this.boostTier = this.ersTier;
-      this.boostTimer = p.boostTime[this.boostTier - 1] ?? 0;
-      this.boostStarted = true;
-    }
-    this.ersCharge = 0;
-    this.ersTier = 0;
-  }
-
-  private endBoost(): void {
-    this.boostTier = 0;
-    this.boostTimer = 0;
   }
 
   // ------------------------------------------------------------------
@@ -596,7 +360,7 @@ export class Car {
     }
   }
 
-  /** スピンを始める。light = ドリフト・壁 (短い)、contact = 車同士の接触 (長い)。direction は回る向き (+1 = 時計回り) */
+  /** スピンを始める。light = 壁 (短い)、contact = 車同士の接触 (長い、M2)。direction は回る向き (+1 = 時計回り) */
   private startSpin(kind: 'light' | 'contact', direction: number): void {
     const p = this.params;
     this.spinVx = this.vx;
@@ -608,7 +372,6 @@ export class Car {
     this.spinStarted = true;
     this.isReversing = false;
     this.mode = 'spin';
-    this.endBoost();
     this.closeDrs();
   }
 
@@ -617,13 +380,6 @@ export class Car {
     if (this.spinTimer > 0) {
       this.spinVx = vx;
       this.spinVy = vy;
-      return;
-    }
-    if (this.mode === 'drift') {
-      this.driftSpeed = Math.hypot(vx, vy);
-      if (this.driftSpeed > 1e-6) this.driftPhi = Math.atan2(vx, -vy);
-      this.heading = this.driftPhi + this.driftDir * this.beta;
-      this.syncFromDrift();
       return;
     }
     const s = Math.sin(this.heading);
@@ -689,19 +445,17 @@ export class Car {
     this.wallImpact = j;
     this.wallImpactX = hitX;
     this.wallImpactY = hitY;
-    if (this.mode === 'drift' && j >= p.driftExitImpulse) this.endDrift('impact');
     this.setVelocity(tx * keep + hitNx * newVn, ty * keep + hitNy * newVn);
 
     if (this.spinTimer <= 0 && j >= p.spinImpulseWall && entryAngle >= p.spinWallMinAngle) {
       // 衝撃が車の右側なら反時計回り
       const side = (hitX - this.x) * Math.cos(this.heading) + (hitY - this.y) * Math.sin(this.heading);
-      this.endDrift('impact');
       this.startSpin('light', side > 0 ? -1 : 1);
       return;
     }
 
     // 向きの補正: 浅い角度でかすったら、車体を壁の接線方向へ寄せる (壁に沿って走り続けられるように)
-    if (this.mode === 'grip' && entryAngle < p.wallAlignMaxAngle && this.sF > 0) {
+    if (entryAngle < p.wallAlignMaxAngle && this.sF > 0) {
       // 接線方向のうち、今の進行方向に近いほう
       const fx = Math.sin(this.heading);
       const fy = -Math.cos(this.heading);
@@ -725,12 +479,8 @@ export class Car {
     const s = this.speed;
     const onTarmac = this.wheelsOffTrack < 2;
     const spinning = this.spinTimer > 0;
-    const drifting = this.mode === 'drift';
-    this.isSpinWarning = drifting && this.beta >= p.driftSpinWarnAngle;
     if (spinning) {
       this.squealVolume = 1;
-    } else if (drifting) {
-      this.squealVolume = this.isSpinWarning ? 1 : Math.min(1, p.driftSquealBase + (1 - p.driftSquealBase) * (this.beta / p.driftSquealAngle));
     } else if (onTarmac && s >= p.squealMinSpeed && this.uReq >= p.squealStart) {
       this.squealVolume = clamp((this.uReq - p.squealStart) / p.squealRange, 0, 1);
     } else {
@@ -738,46 +488,24 @@ export class Car {
     }
     this.squealRate = p.squealRateMin + p.squealRateGain * Math.min(s / p.vBase, 1.2);
 
-    // タイヤ痕: grip は限界超え (後輪)、drift は常に後輪と深い角度で前輪、フルブレーキの開始 (前輪)、スピン (4 輪)
-    const gripMark = !drifting && onTarmac && this.uReq >= p.skidMarkUReq && s >= p.skidMarkMinSpeed;
-    this.skidRear = spinning || drifting || gripMark;
-    if (brake >= 1 && !spinning && !drifting) {
+    // タイヤ痕: 限界超え (後輪)、フルブレーキの開始 (前輪)、スピン (4 輪)
+    this.skidRear = spinning || (onTarmac && this.uReq >= p.skidMarkUReq && s >= p.skidMarkMinSpeed);
+    if (brake >= 1 && !spinning) {
       if (this.fullBrakeTime === 0 && s >= p.lockupMinSpeed) this.lockupStarted = true;
       this.fullBrakeTime += dt;
     } else {
       this.fullBrakeTime = 0;
     }
-    const lockMark = this.fullBrakeTime > 0 && this.fullBrakeTime <= p.lockupMarkTime && s >= p.lockupMinSpeed && onTarmac;
-    this.skidFront = spinning || (drifting && this.beta >= p.driftFrontMarkAngle) || lockMark;
+    this.skidFront = spinning || (this.fullBrakeTime > 0 && this.fullBrakeTime <= p.lockupMarkTime && s >= p.lockupMinSpeed && onTarmac);
 
-    // スモーク: ドリフト中 (速さ smokeMinSpeed 以上) とスピン中
-    if (spinning) this.smokeAmount = 1;
-    else if (drifting && s >= p.smokeMinSpeed) this.smokeAmount = Math.min(1, (this.beta / p.smokeAngleRef) * (s / p.smokeSpeedRef));
-    else this.smokeAmount = 0;
-
-    // 見た目の向き: grip は限界付近で少し内側に向ける (6.5 節)。drift・spin は車体の向きそのもの
-    if (drifting || spinning) {
+    // 見た目の向き: 限界付近で少し内側に向ける (6.5 節)。スピン中は車体の向きそのもの
+    if (spinning) {
       this.drawHeading = this.heading;
     } else {
       const slip = clamp((this.uReq - p.visualSlipStart) * p.visualSlipGain, 0, p.visualSlipMax);
       this.drawHeading = this.heading + Math.sign(this.yawRate) * slip;
     }
   }
-}
-
-/** ドリフトの横グリップの速さによる倍率 gain(s) (7.3 節) */
-export function driftGain(p: Readonly<CarParams>, speed: number): number {
-  if (speed <= p.driftGainSpeedLow) return p.driftLatLow;
-  if (speed >= p.driftGainSpeedHigh) return p.driftLatHigh;
-  const t = (speed - p.driftGainSpeedLow) / (p.driftGainSpeedHigh - p.driftGainSpeedLow);
-  return p.driftLatLow + (p.driftLatHigh - p.driftLatLow) * t;
-}
-
-/** ERS の溜まり (秒) から段階 0〜3 */
-export function ersTierOf(p: Readonly<CarParams>, charge: number): number {
-  let tier = 0;
-  for (let i = 0; i < p.ersTierTime.length; i++) if (charge >= p.ersTierTime[i]) tier = i + 1;
-  return tier;
 }
 
 const tmpPoint = { x: 0, y: 0 };
