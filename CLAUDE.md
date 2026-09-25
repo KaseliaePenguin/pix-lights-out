@@ -17,11 +17,16 @@
 
 ```
 src/
-  main.ts       エントリーポイント (Game 生成と最初のシーン設定)
-  core/         エンジン層: Game / Input / Scene。ゲーム固有のロジックは置かない
-  scenes/       画面ごとのシーン (TitleScene, PlayScene など)
-  entities/     プレイヤー・敵などのゲームオブジェクト
-public/assets/  画像・音声などの静的アセット (実行時は /assets/... で参照)
+  main.ts       エントリーポイント (アセットを読み込んでからタイトルを出す)
+  assetList.ts  読み込む画像・音声・データの一覧と、SE ごとの基準音量
+  core/         エンジン層: Game / Input / Scene、カメラ・ワールド層、アセット、オーディオ、セーブ
+  shared/       DOM に依存しない純粋な計算: 車の物理、コース、周回判定、ゴースト、TimeAttackSession (M4 でホストの Web Worker とも共有)
+  render/       コース・タイヤ痕・車の描画
+  scenes/       画面ごとのシーン (TitleScene, MenuScene, TimeAttackScene など)
+  ui/           HUD・メニューの描画部品 (ビットマップフォントなど)
+  entities/     パーティクルなど、描画用のゲームオブジェクト
+public/assets/  画像・音声・データの静的アセット (実行時は /assets/... で参照)
+promo/          宣伝用の一枚絵 (ゲーム内では使わない。scripts/build-promo.mjs で作り直せる)
 ```
 
 ## 技術スタック
@@ -40,7 +45,10 @@ npm run typecheck  # 型チェックのみ
 npm run build      # 型チェック + 本番ビルド (dist/)
 npm run preview    # ビルド結果の確認
 npm run dashboard  # Claude 利用状況ダッシュボード (http://127.0.0.1:5190)
+node scripts/sim-lap.mjs  # 物理・周回判定のヘッドレス確認 (AI の周回、壁の突き抜け、ゴースト)。src/shared/ を変えたら通す
 ```
+
+開発時は `http://localhost:5173/?scene=timeattack` で走行画面から始められる。
 
 Claude 利用状況ダッシュボード (`tools/claude-dashboard/`) は `~/.claude/projects/` の会話記録を読み、現在のタスク・エージェント稼働状況・推定コストを表示する。費用は API 単価 (`pricing.json`) による推定値で、料金改定時は `pricing.json` を更新する。会話記録を含むため 127.0.0.1 でのみ待ち受ける。
 
