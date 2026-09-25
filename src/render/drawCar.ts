@@ -40,6 +40,22 @@ export function drawCar(layer: WorldLayer, image: HTMLImageElement | null, x: nu
   layer.drawRotated(sprite, x, y, heading, spriteSize, spriteSize);
 }
 
+/**
+ * 車を画面 (800×600) に直接描く (カメラが回転するとき用)。(screenX, screenY) は画面上の中心、
+ * angle は画面上の向き (0 = 上、時計回り)。1 ドット = 2 px のまま回転するので、ワールド層に描いてから
+ * 回転して転送するより、スプライトの崩れが少ない (回転は 1 回だけ)
+ */
+export function drawCarOnScreen(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, screenX: number, screenY: number, angle: number): void {
+  const sprite: CanvasImageSource = image && image.width > 0 ? image : getFallbackSprite();
+  const size = spriteSize * 2;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(screenX, screenY);
+  ctx.rotate(angle);
+  ctx.drawImage(sprite, -size / 2, -size / 2, size, size);
+  ctx.restore();
+}
+
 function getFallbackSprite(): HTMLCanvasElement {
   if (fallbackSprite) return fallbackSprite;
   const canvas = document.createElement('canvas');

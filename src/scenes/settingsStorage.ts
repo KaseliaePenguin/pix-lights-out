@@ -14,6 +14,9 @@ export const saveData = new SaveData('pix-lights-out');
 
 export type NameTagMode = 'all' | 'self' | 'off';
 
+/** 走行画面のカメラ: 北が上で固定 / 車の向きに合わせてなめらかに回す / 段階的に回す */
+export type CameraMode = 'fixed' | 'rotate' | 'rotateStep';
+
 export interface Settings {
   /** 0〜10 */
   bgmVolume: number;
@@ -22,6 +25,7 @@ export interface Settings {
   screenShake: boolean;
   showGhost: boolean;
   nameTags: NameTagMode;
+  cameraMode: CameraMode;
 }
 
 export const volumeSteps = 10;
@@ -32,6 +36,7 @@ export const defaultSettings: Readonly<Settings> = {
   screenShake: true,
   showGhost: true,
   nameTags: 'all',
+  cameraMode: 'rotate',
 };
 
 /** 起動中の設定 (検証済み)。保存できない環境でも SaveData がメモリ上の値を保つ */
@@ -63,6 +68,7 @@ function toSettings(d: Record<string, unknown> | null): Settings {
   if (typeof d.screenShake === 'boolean') settings.screenShake = d.screenShake;
   if (typeof d.showGhost === 'boolean') settings.showGhost = d.showGhost;
   if (d.nameTags === 'all' || d.nameTags === 'self' || d.nameTags === 'off') settings.nameTags = d.nameTags;
+  if (d.cameraMode === 'fixed' || d.cameraMode === 'rotate' || d.cameraMode === 'rotateStep') settings.cameraMode = d.cameraMode;
   return settings;
 }
 

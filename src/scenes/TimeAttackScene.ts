@@ -6,7 +6,7 @@ import type { Scene } from '../core/Scene';
 import { Camera } from '../core/Camera';
 import { WorldLayer } from '../core/WorldLayer';
 import { Particles } from '../entities/Particles';
-import { drawCar } from '../render/drawCar';
+import { drawCar, drawCarOnScreen } from '../render/drawCar';
 import { TireMarks } from '../render/TireMarks';
 import { TrackRenderer } from '../render/TrackRenderer';
 import type { WheelIndex } from '../shared/Car';
@@ -37,6 +37,7 @@ import { drawTimingPanel } from '../ui/timingPanel';
 import { MenuScene } from './MenuScene';
 import { PauseScene } from './PauseScene';
 import { loadSettings, saveData } from './settingsStorage';
+import type { CameraMode } from './settingsStorage';
 
 /** 起動中に 1 回だけ作る (Track の生成は約 0.5 秒かかるため、リスタートやメニューから戻っても使い回す) */
 let cachedTrack: Track | null = null;
@@ -47,6 +48,10 @@ const blinkInterval = 0.125;
 const dirtMinSpeed = 125;
 const wheels: readonly WheelIndex[] = [0, 1, 2, 3];
 const rearWheels: readonly WheelIndex[] = [2, 3];
+/** カメラを回転するときのワールド層の大きさ (ドット)。画面 400×300 ドットの対角線 500 に余裕を足したもの */
+const rotatedLayerSize = 504;
+/** これより遅い (前進) ときはカメラをゆっくり回す (px/秒) */
+const cameraSlowSpeed = 60;
 
 interface DriveSounds {
   engine: EngineSound;
@@ -68,8 +73,11 @@ export class TimeAttackScene implements Scene {
   /** 読み込み中に経過した更新の回数 (LOADING を描いてからコースを作るため) */
   private loadingUpdates = 0;
 
-  private readonly layer = new WorldLayer();
+  /** 北が上で固定の表示に使うワールド層 (400×300) と、回転する表示に使うワールド層 (対角線ぶんの正方形) */
+  private readonly fixedLayer = new WorldLayer();
+  private readonly rotatedLayer = new WorldLayer(rotatedLayerSize, rotatedLayerSize);
   private readonly camera = new Camera();
+  private readonly screenPoint = { x: 0, y: 0 };
   private readonly reader: ControlsReader;
   private readonly controls = createControls();
   private readonly messages = new MessageQueue();
@@ -92,6 +100,33 @@ export class TimeAttackScene implements Scene {
     const settings = loadSettings();
     this.isGhostVisible = settings.showGhost;
     this.camera.shakeEnabled = settings.screenShake;
+    this.applyCameraMode(settings.cameraMode);
+  }
+
+  /** 今の表示で使うワールド層 */
+  private get layer(): WorldLayer {
+    return this.camera.rotation === 'fixed' ? this.fixedLayer : this.rotatedLayer;
+  }
+
+  /** 設定のカメラの方式を反映する。回転に切り替えたときは、向きをすぐに車に合わせる */
+  private applyCameraMode(mode: CameraMode): void {
+    const before = this.camera.rotation;
+    this.camera.rotation = mode === 'fixed' ? 'fixed' : mode === 'rotate' ? 'smooth' : 'step';
+    const car = this.session?.car;
+    if (car && before === 'fixed' && this.camera.rotation !== 'fixed') this.camera.snapTo(car.x, car.y, car.heading);
+  }
+
+  /** カメラを 1 フレーム分動かす。回転するときは進行方向 (滑り角を含まない向き) を少し遅れて追う */
+  private updateCamera(dt: number): void {
+    const car = this.session?.car;
+    if (!car) return;
+    if (this.camera.rotation === 'fixed') {
+      this.camera.update(dt, car.x, car.y, car.vx, car.vy);
+      return;
+    }
+    // スピン中・後退中は向きを止め、ごく低速ではゆっくり回す (向きが急に振れて酔わないように)
+    const hold = car.isSpinning || car.isReversing ? 'freeze' : car.sF < cameraSlowSpeed ? 'slow' : 'none';
+    this.camera.updateRotating(dt, car.x, car.y, car.heading, car.sF, hold);
   }
 
   enter(): void {
@@ -127,8 +162,7 @@ export class TimeAttackScene implements Scene {
     this.reader.read(this.controls);
     for (const e of session.step(this.controls, dt)) this.handleEvent(e);
 
-    const car = session.car;
-    this.camera.update(dt, car.x, car.y, car.vx, car.vy);
+    this.updateCamera(dt);
     this.updateStatusMessages();
     this.messages.update(dt);
     this.updateEffects(dt);
@@ -149,17 +183,29 @@ export class TimeAttackScene implements Scene {
     const images = this.game.assets;
 
     // ワールド層: コース → タイヤ痕 → ゴースト (シャドウ表示) → 自車 → エフェクト
-    layer.setCamera(this.camera.renderX, this.camera.renderY);
+    const isRotated = this.camera.rotation !== 'fixed';
+    const hasGhost = this.isGhostVisible && session.ghostPose(this.ghostPose);
+    const playerImage = images.getImage(this.isPlayerShadow() ? 'car-base-ghost' : 'car-base');
+    if (isRotated) layer.setCamera(this.camera.x, this.camera.y, this.camera.renderAngle);
+    else layer.setCamera(this.camera.renderX, this.camera.renderY);
     this.renderer.render(layer);
     this.marks.render(layer);
-    if (this.isGhostVisible && session.ghostPose(this.ghostPose)) {
-      const p = this.ghostPose;
-      drawCar(layer, images.getImage('car-base-ghost'), p.x, p.y, p.heading);
+    if (!isRotated) {
+      if (hasGhost) drawCar(layer, images.getImage('car-base-ghost'), this.ghostPose.x, this.ghostPose.y, this.ghostPose.heading);
+      drawCar(layer, playerImage, car.x, car.y, car.drawHeading);
     }
-    drawCar(layer, images.getImage(this.isPlayerShadow() ? 'car-base-ghost' : 'car-base'), car.x, car.y, car.drawHeading);
     if (car.drsOpen) this.drawDrsWind();
     this.particles.render(layer);
-    layer.present(ctx);
+    if (isRotated) {
+      // 回転する表示: 画面揺れは回転後の画面にかける。車はワールド層ではなく画面に直接描く (回転を 1 回にしてドットの崩れを減らす)
+      const shakeX = this.camera.shakeX;
+      const shakeY = this.camera.shakeY;
+      layer.present(ctx, shakeX, shakeY);
+      if (hasGhost) this.drawCarOnScreen(ctx, images.getImage('car-base-ghost'), this.ghostPose.x, this.ghostPose.y, this.ghostPose.heading, shakeX, shakeY);
+      this.drawCarOnScreen(ctx, playerImage, car.x, car.y, car.drawHeading, shakeX, shakeY);
+    } else {
+      layer.present(ctx);
+    }
 
     // コース復帰の暗転 (HUD の手前まで)。4 段階で暗くする
     if (session.screenFade > 0) {
@@ -197,6 +243,11 @@ export class TimeAttackScene implements Scene {
     this.startRun();
   }
 
+  private drawCarOnScreen(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, x: number, y: number, heading: number, shakeX: number, shakeY: number): void {
+    const p = this.layer.worldToScreen(x, y, this.screenPoint);
+    drawCarOnScreen(ctx, image, p.x + shakeX, p.y + shakeY, this.layer.toScreenAngle(heading));
+  }
+
   /** 開始位置からカウントダウンをやり直す (最初とリスタート) */
   private startRun(): void {
     const session = this.session;
@@ -205,7 +256,7 @@ export class TimeAttackScene implements Scene {
     this.marks?.clear();
     this.particles.clear();
     this.messages.clear();
-    this.camera.snapTo(session.car.x, session.car.y);
+    this.camera.snapTo(session.car.x, session.car.y, session.car.heading);
     this.time = 0;
     // コースの生成などで止まっていた時間をまとめて進めない (カウントダウンが短くならないように)
     this.game.resetClock();
@@ -243,7 +294,8 @@ export class TimeAttackScene implements Scene {
         audio.playSe('ui-error');
         break;
       case 'resetPlaced':
-        this.camera.snapTo(session.car.x, session.car.y);
+        // 置き直したときは、向きもすぐに合わせる (回転する表示で画面が大きく回らないように)
+        this.camera.snapTo(session.car.x, session.car.y, session.car.heading);
         break;
       case 'resetFinished':
         this.messages.setStatus('reset', null);
@@ -403,6 +455,7 @@ export class TimeAttackScene implements Scene {
         const settings = loadSettings();
         this.isGhostVisible = settings.showGhost;
         this.camera.shakeEnabled = settings.screenShake;
+        this.applyCameraMode(settings.cameraMode);
       },
     });
   }
@@ -436,7 +489,8 @@ export class TimeAttackScene implements Scene {
 
     if (lap.isCheckpointMissed) {
       const gate = session.track.checkpoints[lap.nextCheckpoint];
-      const angle = Math.atan2((gate.ay + gate.by) / 2 - car.y, (gate.ax + gate.bx) / 2 - car.x);
+      // ワールドでの向きを、回転した画面の上での向きに直す
+      const angle = Math.atan2((gate.ay + gate.by) / 2 - car.y, (gate.ax + gate.bx) / 2 - car.x) - this.camera.renderAngle;
       drawCheckpointArrow(ctx, angle);
     }
     if (session.phase === 'countdown') drawCountdown(ctx, Math.ceil(session.countdownRemaining - 1e-9));

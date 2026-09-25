@@ -14,11 +14,13 @@ import {
   wasMenuUpPressed,
 } from './menuKeys';
 import { applyVolumeSettings, loadSettings, saveSettings, volumeSteps } from './settingsStorage';
-import type { NameTagMode, Settings } from './settingsStorage';
+import type { CameraMode, NameTagMode, Settings } from './settingsStorage';
 
-type SettingsItem = 'bgmVolume' | 'seVolume' | 'screenShake' | 'showGhost' | 'nameTags' | 'controls' | 'back';
+type SettingsItem = 'bgmVolume' | 'seVolume' | 'screenShake' | 'showGhost' | 'nameTags' | 'cameraMode' | 'controls' | 'back';
 
-const items: readonly SettingsItem[] = ['bgmVolume', 'seVolume', 'screenShake', 'showGhost', 'nameTags', 'controls', 'back'];
+const items: readonly SettingsItem[] = ['bgmVolume', 'seVolume', 'screenShake', 'showGhost', 'nameTags', 'cameraMode', 'controls', 'back'];
+const cameraModes: readonly CameraMode[] = ['fixed', 'rotate', 'rotateStep'];
+const cameraModeLabels: Record<CameraMode, string> = { fixed: 'FIXED', rotate: 'ROTATE', rotateStep: 'ROTATE STEP' };
 const nameTagModes: readonly NameTagMode[] = ['all', 'self', 'off'];
 const nameTagLabels: Record<NameTagMode, string> = { all: 'ALL', self: 'SELF', off: 'OFF' };
 
@@ -94,6 +96,11 @@ export class SettingsScene implements Scene {
         s.nameTags = nameTagModes[(index + step + nameTagModes.length) % nameTagModes.length];
         break;
       }
+      case 'cameraMode': {
+        const index = cameraModes.indexOf(s.cameraMode);
+        s.cameraMode = cameraModes[(index + step + cameraModes.length) % cameraModes.length];
+        break;
+      }
       default:
         return;
     }
@@ -108,6 +115,7 @@ export class SettingsScene implements Scene {
       case 'screenShake':
       case 'showGhost':
       case 'nameTags':
+      case 'cameraMode':
         this.changeValue(1);
         break;
       case 'controls':
@@ -138,6 +146,8 @@ export class SettingsScene implements Scene {
         return { label: 'GHOST', isEnabled: true, value: onOff(s.showGhost) };
       case 'nameTags':
         return { label: 'NAME TAGS', isEnabled: true, value: nameTagLabels[s.nameTags] };
+      case 'cameraMode':
+        return { label: 'CAMERA', isEnabled: true, value: cameraModeLabels[s.cameraMode] };
       case 'controls':
         return { label: 'CONTROLS', isEnabled: true };
       case 'back':
