@@ -76,6 +76,11 @@ export interface PitLaneData {
 export interface TrackData {
   id: string;
   name: string;
+  /**
+   * コースデータのバージョン。形・幅・ランオフ・壁・チェックポイントなど、走りやタイムに影響する変更をしたら上げる。
+   * 自己ベストとゴーストは、物理のバージョンとこのバージョンの組 (recordVersionOf) が違えば破棄する
+   */
+  version: number;
   /** コントロールラインでの進行方向 θ */
   startHeading: number;
   defaultWidth: number;

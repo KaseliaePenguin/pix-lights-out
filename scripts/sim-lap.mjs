@@ -19,7 +19,7 @@ export { createControls } from './src/shared/controls';
 export { RacingLine } from './src/shared/RacingLine';
 export { LineFollowerAi } from './src/shared/LineFollowerAi';
 export { TimeAttackSession } from './src/shared/TimeAttackSession';
-export { GhostPlayer } from './src/shared/ghost';
+export { GhostPlayer, GhostRecorder } from './src/shared/ghost';
 export { VirtualGearbox } from './src/shared/VirtualGearbox';
 `;
 const bundle = await build({
@@ -204,7 +204,7 @@ console.log('\n== 逆走とコース復帰 ==');
     if (evs.some((e) => e.type === 'wrongWayStarted')) wrongAt = t;
   }
   check(wrongAt > 0.9 && wrongAt < 1.4, 'WRONG WAY が約 1 秒後に出る', `${wrongAt.toFixed(2)} 秒`);
-  check(session.canReset, '逆走中はコース復帰が使える');
+  check(session.isResetAvailable, '逆走中はコース復帰が使える');
   c.throttle = 0;
   c.resetPressed = true;
   let placed = false;
@@ -285,6 +285,152 @@ for (const kind of ['grass', 'gravel']) {
   console.log(`  ${kind}: 500 → ${m.carParams.surfaces[kind].speedCap} px/秒 まで ${parts.join(' / ')}`);
 }
 console.log('  (目安: 芝生 約 0.7 秒・約 250 px、砂利 約 0.5 秒)');
+
+
+// ---------------------------------------------------------------- レビューの指摘の再発確認
+console.log('\n== ピットレーン・DRS・未通過・復帰の禁止・ゴースト (不具合の再発確認) ==');
+const readyTimeAttack = () => {
+  const session = new m.TimeAttackSession(track);
+  const c = m.createControls();
+  for (let i = 0; i < 3.1 / dt; i++) session.step(c, dt);
+  return { session, c };
+};
+{
+  // 入口の手前でコースの右 (ランオフの芝生・ピットの路面の端) にはみ出して、そのまま戻る
+  const g = track.pitEntryGate;
+  const gp = track.project((g.ax + g.bx) / 2, (g.ay + g.by) / 2, -1);
+  let falseEntries = 0;
+  for (const lat of [40, 50, 60, 70]) {
+    const { session, c } = readyTimeAttack();
+    session.car.placeAt(track.poseAt(gp.s - 150, lat));
+    session.lap.projection.index = -1;
+    session.car.sF = 250;
+    c.throttle = 1;
+    for (let i = 0; i < 90; i++) if (session.step(c, dt).some((e) => e.type === 'pitEntry')) falseEntries++;
+    if (session.lap.isInPitLane) falseEntries++;
+  }
+  check(falseEntries === 0, 'ピット入口の手前でランオフにはみ出しても pitEntry にならない');
+}
+{
+  // ピットレーンの経路どおりに 225 px/秒 で通り抜ける
+  const { session } = readyTimeAttack();
+  const car = session.car;
+  const types = [];
+  const pose = { x: 0, y: 0, heading: 0 };
+  track.pitPoseAt(0, pose);
+  car.placeAt(pose);
+  session.lap.projection.index = -1;
+  for (let d = 0; d <= track.pitLength; d += 225 * dt) {
+    track.pitPoseAt(d, pose);
+    car.prevX = car.x; car.prevY = car.y;
+    car.x = pose.x; car.y = pose.y; car.heading = pose.heading;
+    for (const e of session.lap.update(car, dt)) types.push(e.type);
+  }
+  const entries = types.filter((t) => t === 'pitEntry').length;
+  const exits = types.filter((t) => t === 'pitExit').length;
+  check(entries === 1 && exits === 1 && !session.lap.isInPitLane, 'ピットレーンを通り抜けると pitEntry・pitExit が 1 回ずつ', `pitEntry ${entries} / pitExit ${exits}`);
+}
+{
+  // DRS を開いたまま区間の終わりまで走ると drsClosed が出る
+  const { session, c } = readyTimeAttack();
+  session.car.placeAt(track.poseAt(track.drsStartS + 20, 0));
+  session.lap.projection.index = -1;
+  session.car.sF = 500;
+  c.throttle = 1;
+  let opened = false;
+  let closed = false;
+  for (let i = 0; i < 60 * 8; i++) {
+    c.drsPressed = !opened;
+    const evs = session.step(c, dt);
+    if (evs.some((e) => e.type === 'drsOpened')) opened = true;
+    if (evs.some((e) => e.type === 'drsClosed')) { closed = true; break; }
+  }
+  check(opened && closed, 'DRS 区間の終わりで閉じたとき drsClosed が出る');
+}
+{
+  // シケインのゲートはコース上で通り、S2 境界のゲートはランオフ (4 輪コース外) で通ってから止まり、コース復帰する。
+  // 置き直し先がシケインのゲートより手前になるので、走り直すと 2 つ前のゲートを通る (指摘 4 の状況)
+  const { session, c } = readyTimeAttack();
+  const car = session.car;
+  const lap = session.lap;
+  const chicane = track.checkpoints[track.sectorCheckpoints[1] - 1].s;
+  const border = track.checkpoints[track.sectorCheckpoints[1]].s;
+  const move = (sFrom, sTo, lateral, offTrack) => {
+    const pose = { x: 0, y: 0, heading: 0 };
+    for (let d = sFrom; d <= sTo; d += 4) {
+      track.poseAt(d, lateral, pose);
+      car.prevX = car.x; car.prevY = car.y;
+      car.x = pose.x; car.y = pose.y; car.heading = pose.heading;
+      for (const e of lap.update(car, dt)) types.push(e.type);
+      if (offTrack) car.wheelsOffTrack = 4;
+    }
+  };
+  const types = [];
+  car.placeAt(track.poseAt(chicane - 300, 0));
+  lap.resetForStart(car);
+  move(chicane - 300, chicane + 20, 0, false);
+  const offLateral = track.widthAt(border) / 2 + 30;
+  move(chicane + 24, border + 40, -offLateral, true);
+  const nextAfter = lap.nextCheckpoint;
+  // 止まって (低速 1 秒) R を押す
+  c.throttle = 0;
+  for (let k = 0; k < 70; k++) session.step(c, dt);
+  c.resetPressed = true;
+  let placed = false;
+  for (let k = 0; k < 150; k++) {
+    if (session.step(c, dt).some((e) => e.type === 'resetPlaced')) placed = true;
+    c.resetPressed = false;
+  }
+  const s0 = lap.projection.s;
+  types.length = 0;
+  move(s0, border + 300, 0, false);
+  const missed = types.filter((t) => t === 'checkpointMissed').length;
+  check(placed && s0 < chicane && nextAfter === track.sectorCheckpoints[1] + 1 && missed === 0,
+    'コース復帰で 2 つ前のゲートより手前に置かれても MISSED CHECKPOINT が出ない',
+    `置き直し先はシケインのゲートの ${(chicane - s0).toFixed(0)} px 手前、未通過 ${missed}`);
+}
+{
+  // 復帰後 3 秒は復帰できない。低速の条件は禁止期間が終わってから数える
+  const { session, c } = readyTimeAttack();
+  const start = track.poseAt(track.length - 875 + 300, 0);
+  session.car.placeAt({ x: start.x, y: start.y, heading: start.heading + Math.PI });
+  session.lap.projection.index = -1;
+  c.throttle = 1;
+  for (let i = 0; i < 120 && !session.lap.isWrongWay; i++) session.step(c, dt);
+  c.throttle = 0;
+  c.resetPressed = true;
+  let finishedAt = -1;
+  let t = 0;
+  let rejectedInLock = false;
+  let availableAt = -1;
+  for (let i = 0; i < 60 * 8; i++) {
+    const evs = session.step(c, dt);
+    c.resetPressed = false;
+    t += dt;
+    if (evs.some((e) => e.type === 'resetFinished')) finishedAt = t;
+    if (finishedAt >= 0 && t - finishedAt > 1 && t - finishedAt < 1.1) {
+      c.resetPressed = true;
+      const r = session.step(c, dt);
+      c.resetPressed = false;
+      t += dt;
+      if (r.some((e) => e.type === 'resetRejected')) rejectedInLock = true;
+    }
+    if (finishedAt >= 0 && availableAt < 0 && session.isResetAvailable) availableAt = t - finishedAt;
+  }
+  check(rejectedInLock, '復帰後 3 秒の間に R を押すと resetRejected');
+  check(availableAt > 3.9 && availableAt < 4.2, '止まったままなら、禁止期間 3 秒 + 低速 1 秒 で復帰できるようになる', `${availableAt.toFixed(2)} 秒`);
+}
+{
+  // フレームが 1 つだけのゴースト
+  const rec = new m.GhostRecorder();
+  rec.start(0, dt, 100, 100, 0);
+  rec.record(0.001, 100, 100, 0);
+  const data = rec.finish(track.id, track.version, 0.02, [], []);
+  const player = new m.GhostPlayer(data);
+  const pose = { x: 0, y: 0, heading: 0 };
+  const ok = player.sample(0.01, pose);
+  check(data.frameCount === 1 && ok && Number.isFinite(pose.x) && Number.isFinite(pose.heading), 'フレームが 1 つのゴーストでも NaN にならない');
+}
 
 // ---------------------------------------------------------------- 仮想ギア
 {

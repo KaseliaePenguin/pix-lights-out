@@ -90,6 +90,8 @@ const clearanceMinGap = 300;
 export class Track {
   readonly id: string;
   readonly name: string;
+  /** コースデータのバージョン (TrackData.version) */
+  readonly version: number;
   /** 1 周の長さ (中心線、px) */
   readonly length: number;
   readonly worldWidth: number;
@@ -149,6 +151,7 @@ export class Track {
   constructor(readonly data: TrackData) {
     this.id = data.id;
     this.name = data.name;
+    this.version = data.version;
     this.referenceLapTime = data.referenceLapTime;
 
     // --- 1. 中心線 ---

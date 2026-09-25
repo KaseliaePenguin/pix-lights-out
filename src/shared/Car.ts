@@ -94,6 +94,8 @@ export class Car {
   isReversing = false;
 
   private reverseHold = 0;
+  private isUpdating = false;
+  private closedOutsideUpdate = false;
   private fullBrakeTime = 0;
   private spinRate0 = 0;
   private spinVx = 0;
@@ -143,13 +145,18 @@ export class Car {
     this.uReq = 0;
     this.yawRate = 0;
     this.squealVolume = 0;
+    this.closedOutsideUpdate = false;
   }
 
-  /** DRS を閉じる (区間の終わりなど、外から閉じるとき) */
+  /**
+   * DRS を閉じる (区間の終わりなど、外から閉じるとき)。update の前に呼ばれた場合も、
+   * 次の update の drsClosed に確実に出るように、閉じたことを持ち越す
+   */
   closeDrs(): void {
     if (!this.drsOpen) return;
     this.drsOpen = false;
-    this.drsClosed = true;
+    if (this.isUpdating) this.drsClosed = true;
+    else this.closedOutsideUpdate = true;
   }
 
   /** 車輪の位置 (ワールド座標) */
@@ -178,7 +185,9 @@ export class Car {
     this.lockupStarted = false;
     this.spinStarted = false;
     this.drsOpened = false;
-    this.drsClosed = false;
+    this.drsClosed = this.closedOutsideUpdate;
+    this.closedOutsideUpdate = false;
+    this.isUpdating = true;
 
     // 1. 入力 (スピン中・操作不能中は無視する)
     const active = !this.controlLocked && this.spinTimer <= 0;
@@ -263,6 +272,7 @@ export class Car {
 
     // 12. 演出の判定 (8 節)
     this.updateEffects(brake, dt);
+    this.isUpdating = false;
   }
 
   private updateLongitudinal(

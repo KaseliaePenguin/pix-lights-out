@@ -12,6 +12,8 @@ export interface GhostData {
   /** 記録したときの物理のバージョン。今と違えば破棄する */
   physicsVersion: number;
   trackId: string;
+  /** 記録したときのコースデータのバージョン (TrackData.version)。今と違えば破棄する */
+  trackVersion: number;
   lapTime: number;
   /** 記録の頻度 (回/秒) */
   rate: number;
@@ -27,13 +29,14 @@ export interface GhostData {
 const angleScale = 32767 / Math.PI;
 
 /** ゴーストが今の物理・コースで使えるか */
-export function isGhostCompatible(data: unknown, trackId: string): data is GhostData {
+export function isGhostCompatible(data: unknown, trackId: string, trackVersion: number): data is GhostData {
   if (typeof data !== 'object' || data === null) return false;
   const g = data as Partial<GhostData>;
   return (
     g.formatVersion === 1 &&
     g.physicsVersion === physicsVersion &&
     g.trackId === trackId &&
+    g.trackVersion === trackVersion &&
     typeof g.lapTime === 'number' &&
     typeof g.rate === 'number' &&
     typeof g.frameCount === 'number' &&
@@ -51,11 +54,11 @@ export function serializeGhost(data: GhostData): string {
 /**
  * 保存した文字列からゴーストを戻す。壊れている・物理のバージョンやコースが違う場合は null (破棄する)
  */
-export function deserializeGhost(text: string | null, trackId: string): GhostData | null {
+export function deserializeGhost(text: string | null, trackId: string, trackVersion: number): GhostData | null {
   if (!text) return null;
   try {
     const data: unknown = JSON.parse(text);
-    if (!isGhostCompatible(data, trackId)) return null;
+    if (!isGhostCompatible(data, trackId, trackVersion)) return null;
     // frames が壊れていないか (base64 として読めて、長さが足りるか)
     const bytes = atob(data.frames).length;
     if (bytes < data.frameCount * 6) return null;
@@ -73,11 +76,11 @@ export class GhostRecorder {
   private prevX = 0;
   private prevY = 0;
   private prevH = 0;
-  private isRecording = false;
+  private active = false;
   private readonly interval = 1 / raceRules.ghostRate;
 
-  get recording(): boolean {
-    return this.isRecording;
+  get isRecording(): boolean {
+    return this.active;
   }
 
   /**
@@ -91,12 +94,12 @@ export class GhostRecorder {
     this.prevX = prevX;
     this.prevY = prevY;
     this.prevH = prevHeading;
-    this.isRecording = true;
+    this.active = true;
   }
 
   /** 毎フレーム (車の update の後) に呼ぶ */
   record(lapTime: number, x: number, y: number, heading: number): void {
-    if (!this.isRecording) return;
+    if (!this.active) return;
     const span = lapTime - this.prevTime;
     while (this.nextTime <= lapTime && span > 0) {
       const t = Math.max(0, Math.min(1, (this.nextTime - this.prevTime) / span));
@@ -114,19 +117,20 @@ export class GhostRecorder {
   }
 
   cancel(): void {
-    this.isRecording = false;
+    this.active = false;
     this.values = [];
   }
 
   /** 周回の終了時に呼ぶ */
-  finish(trackId: string, lapTime: number, splits: readonly number[], sectors: readonly number[]): GhostData {
-    this.isRecording = false;
+  finish(trackId: string, trackVersion: number, lapTime: number, splits: readonly number[], sectors: readonly number[]): GhostData {
+    this.active = false;
     const arr = new Int16Array(this.values.length);
     for (let i = 0; i < this.values.length; i++) arr[i] = Math.max(-32768, Math.min(32767, this.values[i]));
     return {
       formatVersion: 1,
       physicsVersion,
       trackId,
+      trackVersion,
       lapTime,
       rate: raceRules.ghostRate,
       frameCount: this.values.length / 3,
@@ -154,7 +158,8 @@ export class GhostPlayer {
     const count = Math.min(this.data.frameCount, Math.floor(this.frames.length / 3));
     if (lapTime < 0 || count === 0 || lapTime > this.data.lapTime) return false;
     const u = Math.min(lapTime * this.data.rate, count - 1);
-    const i = Math.min(Math.floor(u), count - 2);
+    // フレームが 1 つだけのときは i = 0、t = 0 (count - 2 が負になって NaN にならないように)
+    const i = Math.max(0, Math.min(Math.floor(u), count - 2));
     const t = count > 1 ? u - i : 0;
     const a = i * 3;
     const b = Math.min(i + 1, count - 1) * 3;

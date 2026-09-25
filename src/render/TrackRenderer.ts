@@ -8,6 +8,8 @@ import { TrackPainter } from './TrackPainter';
 const chunkSize = 256;
 /** 覚えておくチャンクの最大数 (1 枚 256 KB。48 枚で約 12 MB) */
 const maxCachedChunks = 48;
+/** ワールドの外の色 (壁の外と同じ #1e1e2e。style-guide.md §5 レイヤー 1b) */
+const outsideColor = '#1e1e2e';
 /** 画面の外側のこの範囲 (ドット) のチャンクを、1 フレームに 1 枚ずつ先に塗っておく */
 const prefetchMargin = 128;
 
@@ -53,8 +55,9 @@ export class TrackRenderer {
     const y0 = Math.max(0, Math.floor(top / chunkSize));
     const x1 = Math.min(this.chunksX - 1, Math.floor((left + layer.width - 1) / chunkSize));
     const y1 = Math.min(this.chunksY - 1, Math.floor((top + layer.height - 1) / chunkSize));
+    // ワールドの外 (チャンクがない場所) に前のフレームの絵が残らないよう、先に壁の外の色で塗る
+    layer.clear(outsideColor);
     const ctx = layer.ctx;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
     for (let cy = y0; cy <= y1; cy++) {
       for (let cx = x0; cx <= x1; cx++) {
         const canvas = this.chunk(cx, cy);

@@ -1,6 +1,6 @@
 import { Car } from './Car';
 import type { CarParams } from './carParams';
-import { carParams, physicsVersion, raceRules } from './carParams';
+import { carParams, raceRules, recordVersionOf } from './carParams';
 import type { Controls } from './controls';
 import { DrsController } from './DrsController';
 import type { GhostData } from './ghost';
@@ -15,7 +15,8 @@ export type TimingResult = 'overall' | 'personal' | 'slower' | 'none';
 
 /** タイムアタックの保存データ (コースごと) */
 export interface TimeAttackRecord {
-  physicsVersion: number;
+  /** recordVersionOf(track) の値 (物理とコースデータのバージョンの組)。今と違えば使わない */
+  recordVersion: string;
   trackId: string;
   bestLap: number | null;
   /** 保存されている全期間の最速区間 (紫の判定に使う) */
@@ -45,8 +46,8 @@ export type TimeAttackEvent =
 
 export type TimeAttackPhase = 'countdown' | 'running';
 
-export function createEmptyRecord(trackId: string): TimeAttackRecord {
-  return { physicsVersion, trackId, bestLap: null, bestSectors: [null, null, null], ghost: null };
+export function createEmptyRecord(track: Track): TimeAttackRecord {
+  return { recordVersion: recordVersionOf(track), trackId: track.id, bestLap: null, bestSectors: [null, null, null], ghost: null };
 }
 
 /**
@@ -94,8 +95,9 @@ export class TimeAttackSession {
     this.car.wear = 0;
     this.lap = new LapTracker(track);
     this.drs = new DrsController(track, 'free');
-    this.record = isRecordUsable(savedRecord, track.id) ? cloneRecord(savedRecord) : createEmptyRecord(track.id);
-    if (this.record.ghost && isGhostCompatible(this.record.ghost, track.id)) this.ghostPlayer = new GhostPlayer(this.record.ghost);
+    this.record = isRecordUsable(savedRecord, track) ? cloneRecord(savedRecord) : createEmptyRecord(track);
+    if (this.record.ghost && !isGhostCompatible(this.record.ghost, track.id, track.version)) this.record.ghost = null;
+    if (this.record.ghost) this.ghostPlayer = new GhostPlayer(this.record.ghost);
     this.restart();
   }
 
@@ -118,8 +120,9 @@ export class TimeAttackSession {
   }
 
   /** コース復帰が今使えるか (PRESS R TO RESET を出す) */
-  get canReset(): boolean {
-    return this.phase === 'running' && this.resetTimer < 0 && this.lap.canReset(this.car);
+  get isResetAvailable(): boolean {
+    // コース復帰の直後 (自車が点滅している 3 秒間) は、続けて復帰できない
+    return this.phase === 'running' && this.resetTimer < 0 && this.ghostTimeRemaining <= 0 && this.lap.isResetAvailable(this.car);
   }
 
   /** 現在の周のタイム */
@@ -158,7 +161,7 @@ export class TimeAttackSession {
 
     // コース復帰
     if (controls.resetPressed && this.phase === 'running' && this.resetTimer < 0) {
-      if (this.lap.canReset(car)) {
+      if (this.isResetAvailable) {
         this.resetTimer = 0;
         car.controlLocked = true;
         this.events.push({ type: 'resetStarted' });
@@ -170,13 +173,15 @@ export class TimeAttackSession {
 
     this.drs.update(car, this.lap.projection.s);
     car.update(controls, dt);
-    this.gearbox.update(car.sF);
+    // スピン中は sF が更新されないので、実際の速さを使う
+    this.gearbox.update(car.isSpinning ? car.speed : car.sF);
     const lapEvents = this.lap.update(car, dt);
+    if (this.resetTimer >= 0 || this.ghostTimeRemaining > 0) this.lap.holdResetConditions();
     for (const e of lapEvents) this.handleLapEvent(e, dt);
     if (this.drs.enabledOnEntry) this.events.push({ type: 'drsEnabled' });
     if (car.drsOpened) this.events.push({ type: 'drsOpened' });
     if (car.drsClosed) this.events.push({ type: 'drsClosed' });
-    if (this.recorder.recording) this.recorder.record(this.lap.currentLapTime, car.x, car.y, car.heading);
+    if (this.recorder.isRecording) this.recorder.record(this.lap.currentLapTime, car.x, car.y, car.heading);
     return this.events;
   }
 
@@ -291,8 +296,8 @@ export class TimeAttackSession {
         }
       }
     }
-    if (isNewRecord && this.recorder.recording) {
-      const ghost = this.recorder.finish(this.track.id, time, splits, sectors);
+    if (isNewRecord && this.recorder.isRecording) {
+      const ghost = this.recorder.finish(this.track.id, this.track.version, time, splits, sectors);
       this.record.bestLap = time;
       this.record.ghost = ghost;
       this.ghostPlayer = new GhostPlayer(ghost);
@@ -307,10 +312,10 @@ export class TimeAttackSession {
   }
 }
 
-function isRecordUsable(record: TimeAttackRecord | null, trackId: string): record is TimeAttackRecord {
-  return record !== null && record.physicsVersion === physicsVersion && record.trackId === trackId;
+function isRecordUsable(record: TimeAttackRecord | null, track: Track): record is TimeAttackRecord {
+  return record !== null && record.recordVersion === recordVersionOf(track) && record.trackId === track.id;
 }
 
 function cloneRecord(r: TimeAttackRecord): TimeAttackRecord {
-  return { physicsVersion: r.physicsVersion, trackId: r.trackId, bestLap: r.bestLap, bestSectors: r.bestSectors.slice(0, 3), ghost: r.ghost };
+  return { recordVersion: r.recordVersion, trackId: r.trackId, bestLap: r.bestLap, bestSectors: r.bestSectors.slice(0, 3), ghost: r.ghost };
 }

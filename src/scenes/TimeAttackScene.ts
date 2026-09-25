@@ -12,7 +12,7 @@ import { TrackRenderer } from '../render/TrackRenderer';
 import type { WheelIndex } from '../shared/Car';
 import { computeCarSound, createCarSoundParams, wallImpactEffect } from '../shared/carEffects';
 import type { ImpactEffect } from '../shared/carEffects';
-import { physicsVersion, raceRules } from '../shared/carParams';
+import { physicsVersion, raceRules, recordVersionOf } from '../shared/carParams';
 import { createControls } from '../shared/controls';
 import { deserializeGhost, serializeGhost } from '../shared/ghost';
 import type { GhostData } from '../shared/ghost';
@@ -179,7 +179,7 @@ export class TimeAttackScene implements Scene {
     // 最初のフレームの引っかかりを減らすため、開始位置のまわりを先に塗っておく
     this.renderer.prepare(track.soloStart.x, track.soloStart.y);
     this.marks = new TireMarks(track);
-    this.session = new TimeAttackSession(track, loadRecord(track.id));
+    this.session = new TimeAttackSession(track, loadRecord(track));
     this.savedGhost = this.session.record.ghost;
     this.startRun();
     const audio = this.game.audio;
@@ -269,7 +269,7 @@ export class TimeAttackScene implements Scene {
     const m = this.messages;
     m.setStatus('wrongWay', lap.isWrongWay ? hudMessages.wrongWay() : null);
     m.setStatus('missedCheckpoint', lap.isCheckpointMissed ? hudMessages.missedCheckpoint() : null);
-    m.setStatus('canReset', session.canReset ? hudMessages.pressToReset(this.reader.lastUsedKind === 'gamepad') : null);
+    m.setStatus('canReset', session.isResetAvailable ? hudMessages.pressToReset(this.reader.lastUsedKind === 'gamepad') : null);
     // 置き直したあとの操作不能の間だけカウントを出す (暗転中は出さない)
     const isCounting = session.resetLockRemaining > 0 && session.screenFade < 1 && session.car.controlLocked && session.phase === 'running';
     m.setStatus('reset', isCounting ? hudMessages.resetCount(session.resetLockRemaining) : null);
@@ -462,12 +462,13 @@ export class TimeAttackScene implements Scene {
 }
 
 /** 保存されている自己ベストとゴーストを、セッションに渡す形にする。どちらもなければ null */
-function loadRecord(trackId: string): TimeAttackRecord | null {
+function loadRecord(track: Track): TimeAttackRecord | null {
+  const trackId = track.id;
   const best = saveData.loadBest(trackId, physicsVersion);
-  const ghost = deserializeGhost(saveData.loadGhost(trackId, physicsVersion), trackId);
+  const ghost = deserializeGhost(saveData.loadGhost(trackId, physicsVersion), trackId, track.version);
   if (!best && !ghost) return null;
   return {
-    physicsVersion,
+    recordVersion: recordVersionOf(track),
     trackId,
     bestLap: best?.bestLap ?? null,
     bestSectors: best?.bestSectors ?? [null, null, null],

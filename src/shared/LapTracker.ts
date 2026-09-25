@@ -2,7 +2,11 @@ import type { Car } from './Car';
 import { raceRules } from './carParams';
 import { segmentIntersection, wrapAngle } from './math';
 import type { Gate, Pose, Track } from './Track';
-import { createProjection } from './Track';
+import { createProjection, SurfaceCode } from './Track';
+
+/** ピットレーンにいる状態を、コース上 (コース端 + この幅以内) に戻ってこの秒数たったら解除する */
+const pitLeaveMargin = 8;
+const pitLeaveTime = 0.5;
 
 export type LapInvalidReason = 'missedCheckpoint' | 'reset' | 'pitLane';
 
@@ -59,6 +63,7 @@ export class LapTracker {
   private wrongWayTimer = 0;
   private slowTimer = 0;
   private offTrackTimer = 0;
+  private pitLeaveTimer = 0;
   private prevS = 0;
   private readonly events: LapEvent[] = [];
 
@@ -105,7 +110,7 @@ export class LapTracker {
   }
 
   /** コース復帰の条件を満たしているか (スピン中・ピット内は不可。スタート前かどうかは呼び出し側で判断する) */
-  canReset(car: Car): boolean {
+  isResetAvailable(car: Car): boolean {
     if (car.isSpinning || this.isInPitLane) return false;
     return (
       this.slowTimer >= raceRules.resetSlowTime ||
@@ -113,6 +118,15 @@ export class LapTracker {
       this.isWrongWay ||
       this.isCheckpointMissed
     );
+  }
+
+  /**
+   * コース復帰の条件のうち、時間で数えるもの (低速 1.0 秒・4 輪コース外 1.5 秒) を 0 に戻す。
+   * コース復帰の手順中と、復帰後の禁止期間 (3 秒) の間は毎フレーム呼び、禁止期間が終わってから数え始める (7.11 節)
+   */
+  holdResetConditions(): void {
+    this.slowTimer = 0;
+    this.offTrackTimer = 0;
   }
 
   /** コース復帰の置き直し先 (最後に正常に走っていた地点から中心線沿いに 150 px 手前) */
@@ -160,9 +174,10 @@ export class LapTracker {
     if (f >= 0) {
       this.passCheckpoint(t0 + f * dt);
     } else {
-      const prevIndex = (this.nextCheckpoint - 1 + n) % n;
-      for (let j = 0; j < n; j++) {
-        if (j === this.nextCheckpoint || j === prevIndex) continue;
+      // 次のゲートより先 (半周以内) のゲートを前向きに通ったときだけ「飛ばした」とみなす。
+      // 後ろのゲート (逆走から戻ったとき・コース復帰で手前に置き直されたとき) は数えない
+      for (let k = 1; k <= Math.floor(n / 2); k++) {
+        const j = (this.nextCheckpoint + k) % n;
         if (crossForward(car, cps[j]) >= 0 && !this.isCheckpointMissed) {
           this.isCheckpointMissed = true;
           this.events.push({ type: 'checkpointMissed' });
@@ -186,14 +201,29 @@ export class LapTracker {
       }
     }
 
-    // 3. ピットレーン
-    if (!this.isInPitLane && crossForward(car, track.pitEntryGate) >= 0) {
-      this.isInPitLane = true;
-      this.events.push({ type: 'pitEntry' });
-      this.invalidate('pitLane');
-    } else if (this.isInPitLane && crossForward(car, track.pitExitGate) >= 0) {
+    // 3. ピットレーン: ゲートではなく位置で判定する。コースのランオフにかかったピットの路面に
+    //    はみ出しただけでは入ったことにせず、ランオフより外のピットの路面に出たら「進入」とする
+    const i = this.projection.index;
+    const lateral = this.projection.lateral;
+    const halfWidth = track.widths[i] / 2;
+    const ownArea = halfWidth + (lateral > 0 ? track.runoffRight[i] : track.runoffLeft[i]);
+    if (!this.isInPitLane) {
+      if (track.surfaceCodeAt(car.x, car.y) === SurfaceCode.pit && Math.abs(lateral) > ownArea + 2) {
+        this.isInPitLane = true;
+        this.pitLeaveTimer = 0;
+        this.events.push({ type: 'pitEntry' });
+        this.invalidate('pitLane');
+      }
+    } else if (crossForward(car, track.pitExitGate) >= 0) {
       this.isInPitLane = false;
       this.events.push({ type: 'pitExit' });
+    } else {
+      // 出口ラインを通らずにコースへ戻った (入口で引き返したなど) ときも、しばらくコース上にいれば解除する
+      this.pitLeaveTimer = Math.abs(lateral) < halfWidth + pitLeaveMargin ? this.pitLeaveTimer + dt : 0;
+      if (this.pitLeaveTimer >= pitLeaveTime) {
+        this.isInPitLane = false;
+        this.events.push({ type: 'pitExit' });
+      }
     }
 
     // 4. 逆走 (10.3 節)

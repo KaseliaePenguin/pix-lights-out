@@ -1,10 +1,19 @@
 /**
  * 車の物理とレースのルールのパラメータ (car-physics.md 14 章、game-design.md 7 章)。
- * 数値を変えたら physicsVersion を上げる。ゴースト・自己ベストはバージョンが違えば破棄する。
+ * 数値を変えたら physicsVersion を上げる。コースデータを変えたときは、そのコースの TrackData.version を上げる。
+ * ゴースト・自己ベストは、両方の組 (recordVersionOf) が保存時と違えば破棄する。
  */
 
-/** 物理のバージョン番号。CarParams・路面テーブル・コースの形を変えたら上げる */
+/** 物理のバージョン番号。CarParams・路面テーブル・当たり判定の計算を変えたら上げる */
 export const physicsVersion = 1;
+
+/**
+ * 自己ベスト・ゴーストが今のゲームで使えるかを表す文字列 (`物理のバージョン-コースのバージョン`)。
+ * セーブデータにはこれを渡して保存し、読むときに違えば破棄する
+ */
+export function recordVersionOf(track: { readonly version: number }): string {
+  return `${physicsVersion}-${track.version}`;
+}
 
 export type SurfaceKind = 'asphalt' | 'kerb' | 'pit' | 'grass' | 'gravel';
 

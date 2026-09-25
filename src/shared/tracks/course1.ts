@@ -26,6 +26,8 @@ function scaled(segments: TrackSegment[]): TrackSegment[] {
 export const course1: TrackData = {
   id: 'course1',
   name: 'COURSE 1',
+  // 1: 最初の版 / 2: ヘアピンの間の壁が消えていた不具合の修正、区間 S1 の境界の変更
+  version: 2,
   startHeading: 0,
   defaultWidth: 60,
   lineWidth: 4,
@@ -69,7 +71,8 @@ export const course1: TrackData = {
   ],
   runoffZones: [],
   sectorEnds: [
-    { seg: 'T5', t: 1, offset: 60 },
+    // 各区間の所要時間をそろえるため、S1 は T5 の手前の直線の途中で終える (game-design.md 第 3 版)
+    { seg: 'st4', t: 0.6 },
     { seg: 'T8', t: 1, offset: 60 },
   ],
   // シケインの真ん中はコース幅だけのゲートにして、イン側のショートカットを無効にする
