@@ -45,7 +45,7 @@
 | ファイル名 | 用途 | 長さ | ループ | バリエーション | 優先度 | 作成状況 |
 | --- | --- | --- | --- | --- | --- | --- |
 | tire-squeal-loop.ogg | グリップ限界の通知。スリップ率で音量・再生速度を連続的に変える | 1.5〜3 秒 | あり | 2 | 高 | 生成済み (試聴待ち、-1: 3.15 秒 / -2: 1.9 秒ループ) |
-| tire-lockup.ogg | 急ブレーキでタイヤがロックしたとき | 0.5〜1 秒 | なし | 2 | 中 | 未作成 |
+| tire-lockup.ogg | 急ブレーキでタイヤがロックしたとき | 0.5〜1 秒 | なし | 2 | 中 | 生成済み (試聴待ち、-1: 0.37 秒 / -2: 0.42 秒。目安 0.5〜1 秒より短い) |
 | offtrack-grass-loop.ogg | 芝生を走っている間。速度で音量・再生速度を変える | 1.5〜3 秒 | あり | 1 | 高 | 生成済み (試聴待ち、2.5 秒ループ) |
 | offtrack-gravel-loop.ogg | 砂利 (グラベル) を走っている間 | 1.5〜3 秒 | あり | 1 | 高 | 生成済み (試聴待ち、2.5 秒ループ) |
 | kerb-rumble-loop.ogg | 縁石に乗っている間のガタガタ音 | 1〜2 秒 | あり | 1 | 中 | 生成済み (試聴待ち、2.0 秒ループ) |
@@ -57,7 +57,7 @@
 | crash-car.ogg | 車同士の接触 (火花)。強さで音量を変える | 0.3〜1 秒 | なし | 3 | 高 | 試作 (衝突音 1 種で試聴 OK) |
 | crash-wall.ogg | 壁・バリアへの衝突 | 0.5〜1 秒 | なし | 3 | 高 | 生成済み (試聴待ち、3 種 0.6〜0.7 秒) |
 | scrape-loop.ogg | 壁や他車と擦れ続けている間 (火花が出続ける) | 1〜2 秒 | あり | 1 | 中 | 生成済み (試聴待ち、2.0 秒ループ) |
-| tire-barrier-hit.ogg | タイヤバリアへの柔らかい衝突 | 0.5〜1 秒 | なし | 2 | 低 | 未作成 |
+| tire-barrier-hit.ogg | タイヤバリアへの柔らかい衝突 | 0.5〜1 秒 | なし | 2 | 低 | 生成済み (試聴待ち、-1: 0.41 秒 / -2: 0.70 秒) |
 
 ### スリップストリーム・DRS
 
@@ -100,7 +100,7 @@
 | ui-confirm.ogg | 決定 | 0.15〜0.4 秒 | なし | 1 | 高 | 生成済み (試聴待ち、0.23 秒) |
 | ui-cancel.ogg | 戻る・キャンセル | 0.15〜0.3 秒 | なし | 1 | 中 | 生成済み (試聴待ち、0.22 秒) |
 | ui-pause.ogg | ポーズ / ポーズ解除 | 0.2〜0.4 秒 | なし | 1 | 中 | 生成済み (試聴待ち、0.17 秒) |
-| ui-error.ogg | 選べない項目を選んだとき・接続失敗 | 0.2〜0.4 秒 | なし | 1 | 低 | 未作成 |
+| ui-error.ogg | 選べない項目を選んだとき・接続失敗 | 0.2〜0.4 秒 | なし | 1 | 低 | 生成済み (試聴待ち、0.37 秒) |
 
 ### オンライン対戦
 
@@ -149,6 +149,9 @@
 | drs-open / drs-close | drs-open-1799627946-2 / drs-close-2152792247-2 + ui-pause の電子音 | `quick mechanical rear wing flap opening/closing, pneumatic actuator ...` | 機械音に短い電子音 (ui-pause 候補 3 / 2 の頭) を -15 dB で重ねた |
 | ui-cursor / ui-confirm / ui-cancel / ui-pause | ui-cursor-3602680816-3 / ui-confirm-2465593198-1 / ui-cancel-640208055-4 / ui-pause-2556034712-4 | `retro 8-bit video game menu ... square wave` | 頭の音だけ切り出し |
 | lap-complete / sector-time / sector-best | lap-complete-3119191679-1 / sector-time-4129768023-1 / sector-best-2724617714-3 | `retro 8-bit video game checkpoint chime` / `notification blip` / `high score chime, rising arpeggio` | 頭の音だけ切り出し |
+| tire-barrier-hit-1 / -2 | tire-barrier-hit-4176508299-3 / -1 | `race car bumping into a stack of rubber tires, soft dull thud with a rubbery bounce, light impact, single, short ...` | 先頭 0.8 秒、直線フェード |
+| tire-lockup-1 / -2 | tire-lockup-3580956293-4 / -5 | `car tires locking up under hard braking on asphalt, short sharp chirp skid, single, short ... muffled high frequencies` | 7 kHz ローパスのあと先頭 0.6 秒、直線フェード |
+| ui-error | ui-error-1642429084-2 | `retro 8-bit video game error buzzer, short low dissonant square wave double buzz, clean` | 頭のブザー 0.16 秒を 50 ms あけて 2 回つなげた |
 
 - 短いワンショット (0.4 秒未満) は LUFS を測れないため、RMS -15 dB (ピーク -1.5 dBFS 以下) に揃えた。drs-open/close はピーク制限で RMS -23〜-26 dB
 - BGM v2 の共通タグ: `cinematic orchestral rock, heroic brass, fast staccato string ostinato, powerful rock drums, pulsing synth bass, sports broadcast opening theme, uplifting` (実在の番組名・作曲者名は入れていない)
