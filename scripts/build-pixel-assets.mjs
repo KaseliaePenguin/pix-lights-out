@@ -5,73 +5,12 @@
 // 生成 AI では 10x20 の車・継ぎ目なしテクスチャ・フォントが作れないため (style-guide.md §2・§5・§7)、
 // 設計図と固定 seed の乱数から直接ピクセルを打つ。確認用の拡大プレビューは assets-src/previews/ に出す。
 
-import { mkdir, readFile } from 'node:fs/promises';
-import sharp from 'sharp';
+import { mkdir } from 'node:fs/promises';
+import { CLEAR, assertPalette, blit, getPx, hex, makeImage, rng, rotateNearest, save, savePreview, setPx } from './lib/pixel.mjs';
 
 const IMG_DIR = 'public/assets/images';
 const UI_DIR = 'public/assets/ui';
 const PREVIEW_DIR = 'assets-src/previews';
-
-const palette = JSON.parse(await readFile('docs/art/palette.json', 'utf8')).colors;
-const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16), 255];
-const CLEAR = [0, 0, 0, 0];
-
-// ---- 画像ユーティリティ (RGBA の配列) ----
-const makeImage = (width, height, fill = CLEAR) => {
-  const data = Buffer.alloc(width * height * 4);
-  for (let i = 0; i < width * height; i++) data.set(fill, i * 4);
-  return { width, height, data };
-};
-const setPx = (img, x, y, c) => img.data.set(c, (y * img.width + x) * 4);
-const getPx = (img, x, y) => [...img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 4)];
-
-const assertPalette = (img, name) => {
-  const allowed = new Set(palette.map((h) => h.toLowerCase()));
-  for (let i = 0; i < img.width * img.height; i++) {
-    const [r, g, b, a] = img.data.subarray(i * 4, i * 4 + 4);
-    if (a === 0) continue;
-    const h = '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
-    if (a !== 255 || !allowed.has(h)) throw new Error(`${name}: パレット外の色 ${h} (alpha ${a})`);
-  }
-};
-
-const save = async (img, path) => {
-  const raw = { raw: { width: img.width, height: img.height, channels: 4 } };
-  // インデックスカラーで保存し、読み戻して色が変わっていないか確かめる (変わる場合は RGBA で保存)
-  const indexed = await sharp(img.data, raw).png({ palette: true, colors: 256, dither: 0, effort: 10 }).toBuffer();
-  const back = await sharp(indexed).ensureAlpha().raw().toBuffer();
-  const same = back.length === img.data.length && back.every((v, i) => v === img.data[i] || (img.data[(i & ~3) + 3] === 0 && back[(i & ~3) + 3] === 0));
-  const buf = same ? indexed : await sharp(img.data, raw).png().toBuffer();
-  await sharp(buf).toFile(path);
-  console.log(`${path} (${img.width}x${img.height}${buf === indexed ? ', indexed' : ', rgba'})`);
-};
-
-const savePreview = async (img, path, scale) => {
-  await sharp(img.data, { raw: { width: img.width, height: img.height, channels: 4 } })
-    .resize(img.width * scale, img.height * scale, { kernel: 'nearest' })
-    .png()
-    .toFile(path);
-  console.log(`${path} (preview x${scale})`);
-};
-
-const blit = (dst, src, ox, oy) => {
-  for (let y = 0; y < src.height; y++) {
-    for (let x = 0; x < src.width; x++) {
-      const c = getPx(src, x, y);
-      const dx = ox + x;
-      const dy = oy + y;
-      if (c[3] > 0 && dx >= 0 && dy >= 0 && dx < dst.width && dy < dst.height) setPx(dst, dx, dy, c);
-    }
-  }
-};
-
-// 固定 seed の乱数 (mulberry32)
-const rng = (seed) => () => {
-  seed = (seed + 0x6d2b79f5) | 0;
-  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-};
 
 await mkdir(IMG_DIR, { recursive: true });
 await mkdir(UI_DIR, { recursive: true });
@@ -126,6 +65,41 @@ const makeShadow = (src, teamColor) => {
 const carGhost = makeShadow(car, hex('#e8322b'));
 assertPalette(carGhost, 'car-base-ghost');
 await save(carGhost, `${IMG_DIR}/car-base-ghost.png`);
+
+// チームカラーの車 car-team-01〜08 とゴースト版 (style-guide.md §3)。
+// 基準車の赤いドットを、模様の範囲ならアクセント色、それ以外はチーム色に置き換える (範囲は設計図の列・行)
+const TEAMS = [
+  { color: '#e8322b', accent: '#ffffff', pattern: (c, r) => c >= 4 && c <= 5 && r <= 17 }, // センターストライプ
+  { color: '#ff8c1a', accent: '#11111b', pattern: (c, r) => r <= 6 }, // ノーズ
+  { color: '#ffd60a', accent: '#11111b', pattern: (c, r) => (c === 3 || c === 6) && r >= 6 && r <= 16 }, // ツインストライプ
+  { color: '#0e9f6e', accent: '#ffffff', pattern: (c, r) => r <= 6 }, // ノーズ
+  { color: '#22d3ee', accent: null, pattern: () => false }, // 無地
+  { color: '#3b82f6', accent: '#ffffff', pattern: (c, r) => r >= 13 && r <= 18 }, // リア
+  { color: '#f048b8', accent: '#11111b', pattern: (c, r) => r >= 10 && r <= 12 }, // 横帯
+  { color: '#ffffff', accent: '#11111b', pattern: (c, r) => c >= 4 && c <= 5 && r <= 17 }, // センターストライプ
+];
+const teamCars = [];
+const teamGhosts = [];
+for (const [i, team] of TEAMS.entries()) {
+  const img = makeImage(24, 24);
+  const base = hex('#e8322b');
+  for (let y = 0; y < 24; y++) {
+    for (let x = 0; x < 24; x++) {
+      const c = getPx(car, x, y);
+      const isBody = c[3] > 0 && c[0] === base[0] && c[1] === base[1] && c[2] === base[2];
+      if (!isBody) setPx(img, x, y, c);
+      else setPx(img, x, y, hex(team.pattern(x - CAR_X, y - CAR_Y) ? team.accent : team.color));
+    }
+  }
+  const ghost = makeShadow(img, hex(team.color));
+  const num = String(i + 1).padStart(2, '0');
+  assertPalette(img, `car-team-${num}`);
+  assertPalette(ghost, `car-team-${num}-ghost`);
+  await save(img, `${IMG_DIR}/car-team-${num}.png`);
+  await save(ghost, `${IMG_DIR}/car-team-${num}-ghost.png`);
+  teamCars.push(img);
+  teamGhosts.push(ghost);
+}
 
 // ---- 2. 路面テクスチャ (32x32、上下左右がつながる) ----
 // 粒は「トーラス上で互いに一定距離以上離す」ランダム配置にし、固まり・縦横の並びを避ける
@@ -323,21 +297,6 @@ await save(font, `${UI_DIR}/ui-font-5x7.png`);
 
 // ---- プレビュー ----
 // 車: アスファルトの上に 0/15/30/45/90 度 回転 (最近傍) + ゴースト (1 ドット間引きの市松) を並べて 8 倍
-const rotateNearest = (src, deg) => {
-  const out = makeImage(src.width, src.height);
-  const a = (deg * Math.PI) / 180;
-  const c = src.width / 2;
-  for (let y = 0; y < out.height; y++) {
-    for (let x = 0; x < out.width; x++) {
-      const dx = x + 0.5 - c;
-      const dy = y + 0.5 - c;
-      const sx = Math.floor(Math.cos(a) * dx + Math.sin(a) * dy + c);
-      const sy = Math.floor(-Math.sin(a) * dx + Math.cos(a) * dy + c);
-      if (sx >= 0 && sy >= 0 && sx < src.width && sy < src.height) setPx(out, x, y, getPx(src, sx, sy));
-    }
-  }
-  return out;
-};
 {
   const variants = [0, 15, 30, 45, 90].map((d) => rotateNearest(car, d));
   variants.push(...[0, 15, 30, 45, 90].map((d) => rotateNearest(carGhost, d)));
@@ -357,6 +316,21 @@ const rotateNearest = (src, deg) => {
     blit(sheet, carGhost, 36, row * 32 + 4);
   });
   await savePreview(sheet, `${PREVIEW_DIR}/car-base-ghost.png`, 8);
+}
+// 8 チーム: 上段が通常、下段がゴースト。左からアスファルト・芝生・砂利の 3 セットを並べる
+{
+  const surfaces = [asphalt, grass, gravel];
+  const W = 24 * 8;
+  const sheet = makeImage(W * surfaces.length + 8 * (surfaces.length - 1), 48, hex('#1e1e2e'));
+  surfaces.forEach((tile, si) => {
+    const ox = si * (W + 8);
+    for (let ty = 0; ty < 48; ty += 32) for (let tx = 0; tx < W; tx += 32) blit(sheet, tile, ox + tx, ty);
+    // 32 の倍数でない端は blit が切るので、はみ出した分を base で塗り直す
+    for (let y = 0; y < 48; y++) for (let x = W; x < W + 8 && ox + x < sheet.width; x++) setPx(sheet, ox + x, y, hex('#1e1e2e'));
+    teamCars.forEach((img, i) => blit(sheet, img, ox + i * 24, 0));
+    teamGhosts.forEach((img, i) => blit(sheet, img, ox + i * 24, 24));
+  });
+  await savePreview(sheet, `${PREVIEW_DIR}/car-teams.png`, 4);
 }
 // フォント: 文字表 (8 倍) と、HUD 風の見本 (2 倍 = 標準の表示サイズ)
 {
