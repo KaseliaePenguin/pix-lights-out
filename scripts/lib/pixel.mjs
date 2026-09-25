@@ -84,3 +84,42 @@ export const loadImage = async (path) => {
   const { data, info } = await sharp(path).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   return { width: info.width, height: info.height, data };
 };
+
+// Scale2x (EPX): 輪郭の段差を保ったまま 2 倍にする
+const scale2x = (src) => {
+  const out = makeImage(src.width * 2, src.height * 2);
+  const at = (x, y) => getPx(src, Math.max(0, Math.min(src.width - 1, x)), Math.max(0, Math.min(src.height - 1, y)));
+  const eq = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+  for (let y = 0; y < src.height; y++) {
+    for (let x = 0; x < src.width; x++) {
+      const p = at(x, y); const a = at(x, y - 1); const b = at(x + 1, y); const c = at(x - 1, y); const d = at(x, y + 1);
+      const e0 = eq(c, a) && !eq(c, d) && !eq(a, b) ? a : p;
+      const e1 = eq(a, b) && !eq(a, c) && !eq(b, d) ? b : p;
+      const e2 = eq(d, c) && !eq(d, b) && !eq(c, a) ? c : p;
+      const e3 = eq(b, d) && !eq(b, a) && !eq(d, c) ? d : p;
+      setPx(out, x * 2, y * 2, e0); setPx(out, x * 2 + 1, y * 2, e1); setPx(out, x * 2, y * 2 + 1, e2); setPx(out, x * 2 + 1, y * 2 + 1, e3);
+    }
+  }
+  return out;
+};
+
+// RotSprite 風の回転: Scale2x で 8 倍にしてから回転し、各ドットの中心を拾って元の大きさに戻す。
+// 最近傍の回転より輪郭の崩れが少ない (宣伝用の一枚絵など、止め絵で任意の角度に回す場合に使う)
+export const rotateSmooth = (src, deg) => {
+  const big = scale2x(scale2x(scale2x(src)));
+  const out = makeImage(src.width, src.height);
+  const a = (deg * Math.PI) / 180;
+  const c = src.width / 2;
+  for (let y = 0; y < out.height; y++) {
+    for (let x = 0; x < out.width; x++) {
+      const dx = x + 0.5 - c;
+      const dy = y + 0.5 - c;
+      const sx = Math.cos(a) * dx + Math.sin(a) * dy + c;
+      const sy = -Math.sin(a) * dx + Math.cos(a) * dy + c;
+      const bx = Math.floor(sx * 8);
+      const by = Math.floor(sy * 8);
+      if (bx >= 0 && by >= 0 && bx < big.width && by < big.height) setPx(out, x, y, getPx(big, bx, by));
+    }
+  }
+  return out;
+};
