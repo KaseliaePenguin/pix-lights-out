@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Claude 利用状況</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f3f3f1;
+    --surface-1: #fcfcfb;
+    --border: #e2e1dc;
+    --grid: #ecebe7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #7a7974;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --good: #008300;
+    --warning: #b87a00;
+    --critical: #d03b3b;
+    --info: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #111110;
+      --surface-1: #1a1a19;
+      --border: #33332f;
+      --grid: #2a2a27;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #8f8e86;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --good: #3fb950;
+      --warning: #d6a02a;
+      --critical: #e66767;
+      --info: #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #111110;
+    --surface-1: #1a1a19;
+    --border: #33332f;
+    --grid: #2a2a27;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8e86;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --good: #3fb950;
+    --warning: #d6a02a;
+    --critical: #e66767;
+    --info: #3987e5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  }
+  header { padding: 20px 24px 8px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header .meta { color: var(--text-secondary); font-size: 13px; }
+  header .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 13px; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+  }
+  main { padding: 8px 24px 32px; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+  .note { font-size: 12px; color: var(--text-secondary); padding: 0 24px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; }
+  .tile, .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+  .tile { padding: 14px 16px; }
+  .tile .label { font-size: 12px; color: var(--text-secondary); }
+  .tile .value { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .sub { font-size: 12px; color: var(--text-muted); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; }
+  .card { padding: 16px; min-width: 0; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  .card h3 { font-size: 13px; margin: 16px 0 8px; color: var(--text-secondary); font-weight: 600; }
+  .empty { color: var(--text-muted); font-size: 13px; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); padding: 6px 8px; white-space: nowrap; }
+  td { border-bottom: 1px solid var(--grid); padding: 6px 8px; vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.desc { color: var(--text-secondary); max-width: 360px; }
+  .status { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 12px; }
+  .status .icon { font-weight: 700; }
+  .s-running .icon { color: var(--info); }
+  .s-completed .icon { color: var(--good); }
+  .s-failed .icon, .s-killed .icon { color: var(--critical); }
+  .s-unknown .icon, .s-pending .icon { color: var(--text-muted); }
+  .s-in_progress .icon { color: var(--warning); }
+  .prompt { font-size: 13px; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow: hidden; }
+  .active-session { border-left: 3px solid var(--info); padding: 4px 0 4px 12px; margin-bottom: 12px; }
+  .active-session .title { font-weight: 600; }
+  /* 棒グラフ */
+  .hbar-row { display: grid; grid-template-columns: 150px 1fr 80px; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; }
+  .hbar-track { height: 14px; position: relative; }
+  .hbar { height: 100%; background: var(--series-1); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .vbars { display: flex; align-items: flex-end; gap: 2px; height: 160px; border-bottom: 1px solid var(--border); padding-top: 8px; }
+  .vbar-col { flex: 1; min-width: 6px; max-width: 48px; height: 100%; display: flex; align-items: flex-end; cursor: default; }
+  .vbar { width: 100%; background: var(--series-1); border-radius: 4px 4px 0 0; min-height: 2px; }
+  .vbar-col:hover .vbar, .hbar-row:hover .hbar { filter: brightness(1.15); }
+  .vbar-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+  .stack { display: flex; height: 18px; gap: 2px; }
+  .stack > div { height: 100%; min-width: 2px; }
+  .stack > div:first-child { border-radius: 4px 0 0 4px; }
+  .stack > div:last-child { border-radius: 0 4px 4px 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 10; display: none;
+    background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 4px 12px rgb(0 0 0 / 0.15); white-space: nowrap;
+  }
+  .error { color: var(--critical); padding: 0 24px; }
+  @media (max-width: 520px) {
+    header, main, .note, .error { padding-left: 16px; padding-right: 16px; }
+    .grid2 { grid-template-columns: 1fr; }
+    .hbar-row { grid-template-columns: 100px 1fr 64px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Claude 利用状況</h1>
+  <span class="meta" id="project"></span>
+  <span class="spacer"></span>
+  <span class="meta" id="updated"></span>
+  <button id="toggle-refresh" type="button">自動更新: ON</button>
+  <button id="toggle-theme" type="button">テーマ切替</button>
+</header>
+<p class="note" id="pricing-note"></p>
+<p class="error" id="error" hidden></p>
+<main>
+  <section class="tiles" id="tiles"></section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>現在のタスク</h2>
+      <div id="active"></div>
+      <h3>バックグラウンドタスク</h3>
+      <div class="scroll" id="bg"></div>
+      <h3>ToDo</h3>
+      <div id="todos"></div>
+    </div>
+    <div class="card">
+      <h2>エージェント稼働状況</h2>
+      <div class="scroll" id="agents"></div>
+      <h3>最近の実行</h3>
+      <div class="scroll" id="runs"></div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>日別の推定コスト</h2>
+      <div id="by-day"></div>
+    </div>
+    <div class="card">
+      <h2>モデル別の推定コスト</h2>
+      <div id="by-model"></div>
+      <h3>トークンの内訳</h3>
+      <div id="tokens"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>セッション</h2>
+    <div class="scroll" id="sessions"></div>
+  </section>
+</main>
+<div id="tooltip" role="tooltip"></div>
+
+<script>
+const REFRESH_MS = 10000;
+let autoRefresh = true;
+let timer = null;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const usd = (v) => '$' + (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(3));
+const tok = (v) => v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(1) + 'K' : String(v);
+const time = (iso) => iso ? new Date(iso).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+const ago = (iso) => {
+  if (!iso) return '—';
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  return m < 1 ? 'たった今' : m < 60 ? `${m} 分前` : m < 1440 ? `${Math.round(m / 60)} 時間前` : `${Math.round(m / 1440)} 日前`;
+};
+
+const STATUS = {
+  running: ['⟳', '実行中'],
+  in_progress: ['▶', '作業中'],
+  completed: ['✓', '完了'],
+  failed: ['✕', '失敗'],
+  killed: ['■', '停止'],
+  pending: ['○', '未着手'],
+  unknown: ['?', '不明'],
+};
+const status = (s) => {
+  const [icon, label] = STATUS[s] ?? ['?', s];
+  return `<span class="status s-${esc(s)}"><span class="icon" aria-hidden="true">${icon}</span>${esc(label)}</span>`;
+};
+
+function table(headers, rows) {
+  if (!rows.length) return '<p class="empty">なし</p>';
+  const th = headers.map(([label, cls]) => `<th class="${cls ?? ''}">${label}</th>`).join('');
+  return `<table><thead><tr>${th}</tr></thead><tbody>${rows.map((r) => `<tr>${r.join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+function tile(label, value, sub = '') {
+  return `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+}
+
+function render(d) {
+  $('project').textContent = d.projectPath;
+  $('updated').textContent = '更新: ' + new Date(d.generatedAt).toLocaleTimeString('ja-JP');
+  $('pricing-note').textContent =
+    '費用は会話記録のトークン数に API 単価を掛けた推定値です。サブスクリプションプランで利用している場合、実際の請求額ではありません。';
+
+  const t = d.total;
+  const totalTokens = t.input + t.output + t.cacheWrite5m + t.cacheWrite1h + t.cacheRead;
+  const runningAgents = d.agentRuns.filter((r) => r.status === 'running').length;
+  const runningBg = d.backgroundTasks.filter((b) => b.status === 'running').length;
+  $('tiles').innerHTML = [
+    tile('推定コスト (累計)', usd(t.cost), `${t.requests} リクエスト${t.unpriced ? ` / 単価不明 ${t.unpriced}` : ''}`),
+    tile('推定コスト (今日)', usd(d.today)),
+    tile('トークン (累計)', tok(totalTokens), `出力 ${tok(t.output)} / キャッシュ読込 ${tok(t.cacheRead)}`),
+    tile('セッション', String(d.sessions.length), `稼働中 ${d.activeSessions.length}`),
+    tile('実行中', String(runningAgents + runningBg), `エージェント ${runningAgents} / バックグラウンド ${runningBg}`),
+  ].join('');
+
+  $('active').innerHTML = d.activeSessions.length
+    ? d.activeSessions.map((s) => `<div class="active-session"><div class="title">${esc(s.title)} <span class="meta">(${ago(s.lastActivity)})</span></div><div class="prompt">${esc(s.lastPrompt)}</div></div>`).join('')
+    : '<p class="empty">稼働中のセッションはありません (最終操作から 5 分以内のものを表示)</p>';
+
+  $('bg').innerHTML = table(
+    [['状態'], ['内容'], ['開始', 'num']],
+    d.backgroundTasks.slice(0, 12).map((b) => [
+      `<td>${status(b.status)}</td>`,
+      `<td class="desc" title="${esc(b.summary)}">${esc(b.description)}</td>`,
+      `<td class="num">${time(b.startedAt)}</td>`,
+    ]),
+  );
+
+  $('todos').innerHTML = d.todos.length
+    ? table([['状態'], ['内容']], d.todos.map((x) => [`<td>${status(x.status)}</td>`, `<td>${esc(x.content)}</td>`]))
+    : '<p class="empty">ToDo リストはまだ使われていません</p>';
+
+  $('agents').innerHTML = table(
+    [['エージェント'], ['状態'], ['実行回数', 'num'], ['最終実行', 'num'], ['推定コスト', 'num']],
+    d.agents.map((a) => [
+      `<td title="${esc(a.description)}">${esc(a.name)}</td>`,
+      `<td>${a.running ? status('running') : a.runs ? status('completed') : '<span class="status s-pending"><span class="icon">–</span>待機</span>'}</td>`,
+      `<td class="num">${a.runs}</td>`,
+      `<td class="num">${a.lastRun ? ago(a.lastRun) : '—'}</td>`,
+      `<td class="num">${a.cost ? usd(a.cost) : '—'}</td>`,
+    ]),
+  );
+
+  $('runs').innerHTML = table(
+    [['状態'], ['エージェント'], ['内容'], ['開始', 'num']],
+    d.agentRuns.slice(0, 10).map((r) => [
+      `<td>${status(r.status)}</td>`,
+      `<td>${esc(r.agent)}</td>`,
+      `<td class="desc">${esc(r.description)}${r.background ? ' <span class="meta">(裏)</span>' : ''}</td>`,
+      `<td class="num">${time(r.startedAt)}</td>`,
+    ]),
+  );
+
+  // 日別コスト (直近 30 日)
+  const days = d.byDay.slice(-30);
+  if (days.length) {
+    const max = Math.max(...days.map((x) => x.cost), 0.0001);
+    $('by-day').innerHTML =
+      `<div class="vbars">${days.map((x) => `<div class="vbar-col" data-tip="${esc(`${x.day}: ${usd(x.cost)} (${x.requests} リクエスト)`)}"><div class="vbar" style="height:${(x.cost / max) * 100}%"></div></div>`).join('')}</div>` +
+      `<div class="vbar-axis"><span>${days[0].day}</span><span>最大 ${usd(max)}</span><span>${days.at(-1).day}</span></div>`;
+  } else {
+    $('by-day').innerHTML = '<p class="empty">データなし</p>';
+  }
+
+  // モデル別コスト
+  const models = Object.entries(d.byModel).sort((a, b) => b[1].cost - a[1].cost);
+  const maxModel = Math.max(...models.map(([, u]) => u.cost), 0.0001);
+  $('by-model').innerHTML = models.length
+    ? models.map(([m, u]) => `<div class="hbar-row" data-tip="${esc(`${m}: ${usd(u.cost)} / ${u.requests} リクエスト`)}"><span>${esc(m)}</span><div class="hbar-track"><div class="hbar" style="width:${(u.cost / maxModel) * 100}%"></div></div><span class="num" style="text-align:right">${usd(u.cost)}</span></div>`).join('')
+    : '<p class="empty">データなし</p>';
+
+  // トークン内訳 (件数の比率)
+  const parts = [
+    ['入力', t.input, 'var(--series-1)'],
+    ['出力', t.output, 'var(--series-2)'],
+    ['キャッシュ書込', t.cacheWrite5m + t.cacheWrite1h, 'var(--series-3)'],
+    ['キャッシュ読込', t.cacheRead, 'var(--series-4)'],
+  ];
+  $('tokens').innerHTML = totalTokens
+    ? `<div class="stack">${parts.filter(([, v]) => v > 0).map(([l, v, c]) => `<div style="flex:${v};background:${c}" data-tip="${esc(`${l}: ${tok(v)} (${((v / totalTokens) * 100).toFixed(1)}%)`)}"></div>`).join('')}</div>` +
+      `<div class="legend">${parts.map(([l, v, c]) => `<span><span class="sw" style="background:${c}"></span>${l} ${tok(v)}</span>`).join('')}</div>`
+    : '<p class="empty">データなし</p>';
+
+  $('sessions').innerHTML = table(
+    [['タイトル'], ['状態'], ['開始', 'num'], ['最終操作', 'num'], ['リクエスト', 'num'], ['出力トークン', 'num'], ['推定コスト', 'num']],
+    d.sessions.map((s) => [
+      `<td title="${esc(s.id)}">${esc(s.title)}</td>`,
+      `<td>${s.active ? status('running') : '<span class="status s-pending"><span class="icon">–</span>終了</span>'}</td>`,
+      `<td class="num">${time(s.startedAt)}</td>`,
+      `<td class="num">${ago(s.lastActivity)}</td>`,
+      `<td class="num">${s.usage.requests}</td>`,
+      `<td class="num">${tok(s.usage.output)}</td>`,
+      `<td class="num">${usd(s.usage.cost + (s.subagentUsage?.cost ?? 0))}</td>`,
+    ]),
+  );
+}
+
+async function load() {
+  try {
+    const res = await fetch('/api/data', { cache: 'no-store' });
+    if (!res.ok) throw new Error(await res.text());
+    render(await res.json());
+    $('error').hidden = true;
+  } catch (e) {
+    $('error').hidden = false;
+    $('error').textContent = 'データの取得に失敗しました: ' + e.message;
+  }
+}
+
+function schedule() {
+  clearInterval(timer);
+  if (autoRefresh) timer = setInterval(load, REFRESH_MS);
+}
+
+$('toggle-refresh').addEventListener('click', (e) => {
+  autoRefresh = !autoRefresh;
+  e.target.textContent = `自動更新: ${autoRefresh ? 'ON' : 'OFF'}`;
+  schedule();
+});
+
+$('toggle-theme').addEventListener('click', () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  root.dataset.theme = dark ? 'light' : 'dark';
+  try { localStorage.setItem('theme', root.dataset.theme); } catch {}
+});
+try { const saved = localStorage.getItem('theme'); if (saved) document.documentElement.dataset.theme = saved; } catch {}
+
+// ホバーでツールチップ
+const tip = $('tooltip');
+document.addEventListener('mousemove', (e) => {
+  const el = e.target.closest('[data-tip]');
+  if (!el) { tip.style.display = 'none'; return; }
+  tip.textContent = el.dataset.tip;
+  tip.style.display = 'block';
+  const x = Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + 'px';
+  tip.style.top = (e.clientY + 14) + 'px';
+});
+
+load();
+schedule();
+</script>
+</body>
+</html>

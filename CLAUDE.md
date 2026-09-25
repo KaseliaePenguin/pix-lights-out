@@ -39,7 +39,10 @@ npm run dev        # 開発サーバー (http://localhost:5173)
 npm run typecheck  # 型チェックのみ
 npm run build      # 型チェック + 本番ビルド (dist/)
 npm run preview    # ビルド結果の確認
+npm run dashboard  # Claude 利用状況ダッシュボード (http://127.0.0.1:5190)
 ```
+
+Claude 利用状況ダッシュボード (`tools/claude-dashboard/`) は `~/.claude/projects/` の会話記録を読み、現在のタスク・エージェント稼働状況・推定コストを表示する。費用は API 単価 (`pricing.json`) による推定値で、料金改定時は `pricing.json` を更新する。会話記録を含むため 127.0.0.1 でのみ待ち受ける。
 
 変更後は `npm run build` が通ることを確認する。
 

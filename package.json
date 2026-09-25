@@ -11,7 +11,8 @@
     "gen:image": "node scripts/generate-image.mjs",
     "gen:sprite": "node scripts/process-sprite.mjs",
     "gen:sound": "node scripts/generate-sound.mjs",
-    "gen:sound-convert": "node scripts/process-sound.mjs"
+    "gen:sound-convert": "node scripts/process-sound.mjs",
+    "dashboard": "node tools/claude-dashboard/server.mjs"
   },
   "devDependencies": {
     "sharp": "^0.35.4",
