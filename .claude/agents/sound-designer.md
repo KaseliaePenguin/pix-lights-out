@@ -42,7 +42,7 @@ SE のモデルが未導入 (`stable-audio-open-1.0.safetensors` が無いとい
    - BGM: `npm run gen:sound-convert -- --type bgm --in <元音声> --out public/assets/sounds/bgm/<name>.ogg [--start S --end S]`
      (既定でループ化。曲の頭のイントロや終わりのフェードは `--start` / `--end` で切り落としてからループさせる)
    - SE: `npm run gen:sound-convert -- --type se --in <元音声> --out public/assets/sounds/se/<name>.ogg`
-     (既定でモノラル・先頭の無音除去・末尾フェード。エンジン音などループさせる SE は `--loop` を付ける)
+     (既定でモノラル・前後の無音除去・末尾フェード。エンジン音などループさせる SE は `--loop` を付ける)
 3. 測定値と波形画像で確認し、問題があれば切り出し位置を変えるか再生成する (最大 3 回まで)
 4. `docs/sound/sound-list.md` の作成状況を更新する
 

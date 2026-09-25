@@ -3,7 +3,7 @@
 // 例: node scripts/process-sound.mjs --type bgm --in assets-src/generated/sound/race-theme-123.flac --out public/assets/sounds/bgm/race-theme.ogg
 //     node scripts/process-sound.mjs --type se  --in assets-src/generated/sound/tire-screech-456.flac --out public/assets/sounds/se/tire-screech.ogg
 //
-// 処理: 切り出し → (SE) 先頭の無音除去・モノラル化 → (ループ時) 末尾と先頭をクロスフェードしてつなぎ目を消す
+// 処理: 切り出し → (SE) 前後の無音除去・モノラル化 → (ループ時) 末尾と先頭をクロスフェードしてつなぎ目を消す
 //       → 音量を目標ラウドネスに合わせる (ピークは -1 dBFS 以下) → (非ループ時) 末尾フェードアウト → OGG Vorbis
 // 確認用: 波形画像 (ループ時はつなぎ目前後の波形も) を assets-src/previews/sound/ に出力し、ラウドネスとピークを表示する
 
@@ -86,7 +86,11 @@ try {
   // 1. 切り出し・無音除去・チャンネル数と周波数の統一
   const step1 = join(work, 'step1.wav');
   const filters1 = [`atrim=start=${args.start}${args.end ? `:end=${args.end}` : ''}`, 'asetpts=PTS-STARTPTS'];
-  if (!isBgm) filters1.push('silenceremove=start_periods=1:start_threshold=-50dB');
+  if (!isBgm) {
+    // SE は生成秒数より短く鳴り終わることが多いため、前後の無音を両方削る (末尾は反転して先頭扱いで削る)
+    const trim = 'silenceremove=start_periods=1:start_threshold=-50dB';
+    filters1.push(trim, 'areverse', trim, 'areverse');
+  }
   ffmpeg(['-i', args.in, '-af', filters1.join(','), '-ar', '44100', '-ac', mono ? '1' : '2', step1]);
 
   // 2. ループ化: 末尾 X 秒を先頭 X 秒へクロスフェードし、[本体][末尾→先頭] の順に並べる

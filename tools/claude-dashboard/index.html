@@ -124,6 +124,43 @@
     border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: 0 4px 12px rgb(0 0 0 / 0.15); white-space: nowrap;
   }
   .error { color: var(--critical); padding: 0 24px; }
+  /* タブ */
+  nav.tabs { display: flex; gap: 4px; }
+  nav.tabs a {
+    color: var(--text-secondary); text-decoration: none; font-size: 13px;
+    padding: 4px 12px; border-radius: 6px; border: 1px solid transparent;
+  }
+  nav.tabs a[aria-current="page"] { color: var(--text-primary); background: var(--surface-1); border-color: var(--border); font-weight: 600; }
+  /* リソース */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .filters .group { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .filters .group button { border: 0; border-radius: 0; background: var(--surface-1); color: var(--text-secondary); }
+  .filters .group button[aria-pressed="true"] { background: var(--series-1); color: #fff; }
+  .filters input[type="search"] {
+    font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); min-width: 200px;
+  }
+  .folder h2 { font-size: 14px; margin: 0 0 12px; font-family: ui-monospace, Consolas, monospace; }
+  .folder h2 .meta { font-family: inherit; font-weight: 400; color: var(--text-muted); font-size: 12px; margin-left: 8px; }
+  .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 12px; }
+  .asset-list { display: grid; gap: 12px; }
+  .asset { border: 1px solid var(--grid); border-radius: 8px; padding: 10px; min-width: 0; }
+  .asset .name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+  .asset .info { font-size: 12px; color: var(--text-muted); }
+  .checker {
+    display: grid; place-items: center; height: 160px; border-radius: 6px; margin-bottom: 8px; overflow: hidden;
+    background-color: #d9d9d6;
+    background-image: linear-gradient(45deg, #bdbdb9 25%, transparent 25%, transparent 75%, #bdbdb9 75%),
+      linear-gradient(45deg, #bdbdb9 25%, transparent 25%, transparent 75%, #bdbdb9 75%);
+    background-size: 16px 16px; background-position: 0 0, 8px 8px;
+  }
+  .checker img { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+  .checker img.small { width: 128px; height: auto; }
+  .audio-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .audio-row audio { width: 100%; }
+  .audio-row .controls { display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--text-secondary); }
+  .wave { width: 100%; height: 56px; object-fit: fill; border-radius: 4px; background: var(--surface-0); }
+  .wave-label { font-size: 11px; color: var(--text-muted); }
   @media (max-width: 520px) {
     header, main, .note, .error { padding-left: 16px; padding-right: 16px; }
     .grid2 { grid-template-columns: 1fr; }
@@ -133,7 +170,11 @@
 </head>
 <body>
 <header>
-  <h1>Claude 利用状況</h1>
+  <h1>Claude ダッシュボード</h1>
+  <nav class="tabs" aria-label="ページ">
+    <a href="#usage" data-view="usage">利用状況</a>
+    <a href="#resources" data-view="resources">リソース</a>
+  </nav>
   <span class="meta" id="project"></span>
   <span class="spacer"></span>
   <span class="meta" id="updated"></span>
@@ -142,7 +183,27 @@
 </header>
 <p class="note" id="pricing-note"></p>
 <p class="error" id="error" hidden></p>
-<main>
+<main id="view-resources" hidden>
+  <section class="card">
+    <div class="filters">
+      <div class="group" role="group" aria-label="種類">
+        <button type="button" data-kind="all" aria-pressed="true">すべて</button>
+        <button type="button" data-kind="image" aria-pressed="false">画像</button>
+        <button type="button" data-kind="audio" aria-pressed="false">サウンド</button>
+      </div>
+      <div class="group" role="group" aria-label="場所">
+        <button type="button" data-location="all" aria-pressed="true">すべて</button>
+        <button type="button" data-location="ゲーム用" aria-pressed="false">ゲーム用</button>
+        <button type="button" data-location="作業中" aria-pressed="false">作業中</button>
+      </div>
+      <input type="search" id="asset-search" placeholder="ファイル名で絞り込み" />
+      <button type="button" id="assets-reload">再読み込み</button>
+      <span class="meta" id="asset-count"></span>
+    </div>
+  </section>
+  <div id="asset-folders" style="display:grid;gap:16px"></div>
+</main>
+<main id="view-usage">
   <section class="tiles" id="tiles"></section>
 
   <section class="grid2">
@@ -365,8 +426,134 @@ document.addEventListener('mousemove', (e) => {
   tip.style.top = (e.clientY + 14) + 'px';
 });
 
-load();
-schedule();
+// ---- リソースページ ----
+const assetFilter = { kind: 'all', location: 'all', query: '' };
+let assetData = null;
+
+const bytes = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
+const fileUrl = (path) => '/file?path=' + encodeURIComponent(path) + '&t=' + Date.parse(assetData.generatedAt);
+
+function assetCard(a) {
+  const modified = time(a.modifiedAt);
+  if (a.kind === 'image') {
+    // 小さいドット絵は拡大して表示する
+    const small = a.dimensions && a.dimensions.width <= 64 && a.dimensions.height <= 64;
+    const dims = a.dimensions ? `${a.dimensions.width}×${a.dimensions.height} · ` : '';
+    return `<div class="asset">
+      <div class="checker"><img src="${fileUrl(a.path)}" alt="${esc(a.name)}" loading="lazy" class="${small ? 'small' : ''}"></div>
+      <div class="name">${esc(a.name)}</div>
+      <div class="info">${dims}${bytes(a.size)} · ${modified}</div>
+      ${a.preview ? `<div class="info"><a href="${fileUrl(a.preview)}" target="_blank" rel="noopener">8 倍プレビュー</a></div>` : ''}
+    </div>`;
+  }
+  if (a.kind === 'audio') {
+    return `<div class="asset audio-row">
+      <div class="name">${esc(a.name)}</div>
+      <audio controls preload="metadata" src="${fileUrl(a.path)}" data-path="${esc(a.path)}"></audio>
+      <div class="controls">
+        <label><input type="checkbox" class="loop-toggle"> ループ再生</label>
+        <span class="duration"></span>
+        <span>${bytes(a.size)} · ${modified}</span>
+      </div>
+      ${a.waveform ? `<div><div class="wave-label">波形</div><img class="wave" src="${fileUrl(a.waveform)}" alt="${esc(a.name)} の波形"></div>` : ''}
+      ${a.seam ? `<div><div class="wave-label">ループのつなぎ目 (末尾 1 秒 + 先頭 1 秒)</div><img class="wave" src="${fileUrl(a.seam)}" alt="${esc(a.name)} のつなぎ目の波形"></div>` : ''}
+    </div>`;
+  }
+  return `<div class="asset"><div class="name">${esc(a.name)}</div><div class="info">${bytes(a.size)} · ${modified}</div></div>`;
+}
+
+function renderAssets() {
+  if (!assetData) return;
+  const q = assetFilter.query.toLowerCase();
+  const list = assetData.assets.filter((a) =>
+    (assetFilter.kind === 'all' || a.kind === assetFilter.kind) &&
+    (assetFilter.location === 'all' || a.location === assetFilter.location) &&
+    (!q || a.path.toLowerCase().includes(q)));
+  const images = list.filter((a) => a.kind === 'image').length;
+  const audios = list.filter((a) => a.kind === 'audio').length;
+  $('asset-count').textContent = `${list.length} 件 (画像 ${images} / サウンド ${audios})`;
+
+  const folders = new Map();
+  for (const a of list) {
+    if (!folders.has(a.folder)) folders.set(a.folder, []);
+    folders.get(a.folder).push(a);
+  }
+  $('asset-folders').innerHTML = folders.size
+    ? [...folders].map(([folder, items]) => {
+        const hasAudio = items.some((a) => a.kind === 'audio');
+        return `<section class="card folder">
+          <h2>${esc(folder)}/<span class="meta">${items[0].location} · ${items.length} 件</span></h2>
+          <div class="${hasAudio ? 'asset-list' : 'asset-grid'}">${items.map(assetCard).join('')}</div>
+        </section>`;
+      }).join('')
+    : '<section class="card"><p class="empty">該当するリソースはありません。public/assets/ または assets-src/ にファイルを置くと表示されます。</p></section>';
+
+  // 再生時間の表示とループ切り替え
+  for (const audio of document.querySelectorAll('#asset-folders audio')) {
+    const row = audio.closest('.asset');
+    audio.addEventListener('loadedmetadata', () => {
+      if (Number.isFinite(audio.duration)) row.querySelector('.duration').textContent = audio.duration.toFixed(2) + ' 秒';
+    });
+    row.querySelector('.loop-toggle').addEventListener('change', (e) => { audio.loop = e.target.checked; });
+    // 同時に 1 つだけ再生する
+    audio.addEventListener('play', () => {
+      for (const other of document.querySelectorAll('#asset-folders audio')) if (other !== audio) other.pause();
+    });
+  }
+}
+
+async function loadAssets() {
+  try {
+    const res = await fetch('/api/assets', { cache: 'no-store' });
+    if (!res.ok) throw new Error(await res.text());
+    assetData = await res.json();
+    $('project').textContent = assetData.projectPath;
+    $('updated').textContent = '更新: ' + new Date(assetData.generatedAt).toLocaleTimeString('ja-JP');
+    renderAssets();
+    $('error').hidden = true;
+  } catch (e) {
+    $('error').hidden = false;
+    $('error').textContent = 'リソース一覧の取得に失敗しました: ' + e.message;
+  }
+}
+
+for (const btn of document.querySelectorAll('.filters [data-kind], .filters [data-location]')) {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.kind ? 'kind' : 'location';
+    assetFilter[key] = btn.dataset[key];
+    for (const b of btn.parentElement.children) b.setAttribute('aria-pressed', String(b === btn));
+    renderAssets();
+  });
+}
+$('asset-search').addEventListener('input', (e) => { assetFilter.query = e.target.value; renderAssets(); });
+$('assets-reload').addEventListener('click', loadAssets);
+
+// ---- ページ切り替え ----
+// リソースページは再生中の音声を止めないよう自動更新しない (再読み込みボタンで更新)
+let currentView = null;
+function showView() {
+  const view = location.hash === '#resources' ? 'resources' : 'usage';
+  if (view === currentView) return;
+  currentView = view;
+  $('view-usage').hidden = view !== 'usage';
+  $('view-resources').hidden = view !== 'resources';
+  $('pricing-note').hidden = view !== 'usage';
+  $('toggle-refresh').hidden = view !== 'usage';
+  for (const a of document.querySelectorAll('nav.tabs a')) {
+    if (a.dataset.view === view) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  }
+  if (view === 'usage') {
+    for (const audio of document.querySelectorAll('#asset-folders audio')) audio.pause();
+    load();
+    schedule();
+  } else {
+    clearInterval(timer);
+    loadAssets();
+  }
+}
+addEventListener('hashchange', showView);
+showView();
 </script>
 </body>
 </html>

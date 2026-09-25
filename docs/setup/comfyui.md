@@ -104,6 +104,6 @@ npm run gen:sound-convert -- --type se --in assets-src/generated/sound/tire-scre
 | ループ | あり (末尾 2 秒を先頭にクロスフェード。`--no-loop` で無効) | なし (`--loop` で有効。エンジン音など) |
 | チャンネル | ステレオ | モノラル |
 | 目標ラウドネス | -18 LUFS | -16 LUFS |
-| その他 | | 先頭の無音除去、末尾フェード |
+| その他 | | 前後の無音除去、末尾フェード |
 
 確認用に `assets-src/previews/sound/` に波形画像 (ループ時はつなぎ目前後の `-seam.png` も) を出力する。音の良し悪しは必ず人が試聴して判断する。
