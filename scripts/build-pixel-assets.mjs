@@ -140,6 +140,10 @@ const asphalt = makeImage(TILE, TILE, hex('#3c3c46'));
   scatter(asphalt, rand, hex('#2a2a33'), Math.round(AREA * 0.06), 2, taken);
 }
 
+// ピットレーン: コースより明るい基本色に、アスファルト色の粒 8% (style-guide.md §5)
+const pit = makeImage(TILE, TILE, hex('#4b4b57'));
+scatter(pit, rng(5005), hex('#3c3c46'), Math.round(AREA * 0.08), 2, []);
+
 const grass = makeImage(TILE, TILE);
 {
   // 上半分 (行 0-15) が明るい縞、下半分が暗い縞。粒は各縞の中に反対の色を 5%
@@ -198,7 +202,7 @@ const gravel = makeImage(TILE, TILE, hex('#b8a37a'));
   if (placed < count) throw new Error(`砂利の粒を ${count} 個置けなかった (${placed})`);
 }
 
-for (const [name, tile] of [['tile-asphalt', asphalt], ['tile-grass', grass], ['tile-gravel', gravel]]) {
+for (const [name, tile] of [['tile-asphalt', asphalt], ['tile-pit', pit], ['tile-grass', grass], ['tile-gravel', gravel]]) {
   assertPalette(tile, name);
   await save(tile, `${IMG_DIR}/${name}.png`);
   // 継ぎ目確認: 3x3 に並べて 4 倍
@@ -316,6 +320,18 @@ await save(font, `${UI_DIR}/ui-font-5x7.png`);
     blit(sheet, carGhost, 36, row * 32 + 4);
   });
   await savePreview(sheet, `${PREVIEW_DIR}/car-base-ghost.png`, 8);
+}
+// ピットレーンとコースの見分け: 左にアスファルト、右にピット (各 3x3 タイル)、境目に白線 2 ドット
+{
+  const sheet = makeImage(TILE * 6 + 2, TILE * 3);
+  for (let ty = 0; ty < 3; ty++) {
+    for (let tx = 0; tx < 3; tx++) {
+      blit(sheet, asphalt, tx * TILE, ty * TILE);
+      blit(sheet, pit, TILE * 3 + 2 + tx * TILE, ty * TILE);
+    }
+  }
+  for (let y = 0; y < sheet.height; y++) for (const x of [TILE * 3, TILE * 3 + 1]) setPx(sheet, x, y, hex('#ffffff'));
+  await savePreview(sheet, `${PREVIEW_DIR}/tile-pit-vs-asphalt.png`, 4);
 }
 // 8 チーム: 上段が通常、下段がゴースト。左からアスファルト・芝生・砂利の 3 セットを並べる
 {
