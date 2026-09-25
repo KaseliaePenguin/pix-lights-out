@@ -4,5 +4,4 @@ dist/
 .DS_Store
 
 # 画像生成の中間ファイル
-assets-src/generated/
-assets-src/previews/
+assets-src/
