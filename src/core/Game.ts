@@ -16,6 +16,7 @@ export class Game {
   private lastTime = 0;
   private accumulator = 0;
   private readonly step = 1 / 60;
+  private isClockReset = false;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -35,20 +36,35 @@ export class Game {
     this.scene.enter?.();
   }
 
+  /**
+   * たまった時間を捨てる。重い処理 (コースの生成など) の直後に呼ぶと、その間の時間をまとめて進めない。
+   * update の中から呼んでよい (そのフレームの残りの更新は行わない)
+   */
+  resetClock(): void {
+    this.isClockReset = true;
+    this.accumulator = 0;
+    this.lastTime = performance.now();
+  }
+
   start(): void {
     this.lastTime = performance.now();
     requestAnimationFrame(this.loop);
   }
 
   private loop = (now: number): void => {
-    // タブ復帰時などの巨大な dt を抑える
-    const dt = Math.min((now - this.lastTime) / 1000, 0.25);
+    // タブ復帰時などの巨大な dt を抑える。resetClock の直後は now (フレームの開始時刻) が lastTime より前になりうる
+    const dt = Math.max(0, Math.min((now - this.lastTime) / 1000, 0.25));
     this.lastTime = now;
     this.accumulator += dt;
 
+    this.isClockReset = false;
     while (this.accumulator >= this.step) {
       this.scene?.update(this.step);
       this.input.endFrame();
+      if (this.isClockReset) {
+        this.accumulator = 0;
+        break;
+      }
       this.accumulator -= this.step;
     }
 

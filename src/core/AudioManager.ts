@@ -245,15 +245,19 @@ export class AudioManager {
     }
   }
 
-  /** ポーズの解除: 止めた位置から BGM を続け、SE の消音を戻す */
-  resume(): void {
+  /**
+   * ポーズの解除: SE の消音を戻し、止めた位置から BGM を続ける。
+   * 走行画面を抜けるとき (メニューへ戻るなど) は resumeBgm: false にして、止めていた BGM を鳴らさずに捨てる
+   */
+  resume(options: { resumeBgm?: boolean } = {}): void {
     const ctx = this.context;
     if (!ctx || !this.paused) return;
     this.paused = false;
     this.worldBus?.gain.setTargetAtTime(1, ctx.currentTime, busTimeConstant);
     if (this.bgm && this.isBgmPaused) {
       this.isBgmPaused = false;
-      this.startBgmSource(this.bgm, this.bgm.startOffset);
+      if (options.resumeBgm === false) this.fadeOutBgm(0);
+      else this.startBgmSource(this.bgm, this.bgm.startOffset);
     }
   }
 

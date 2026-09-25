@@ -1,5 +1,16 @@
-/** 保存形式のバージョン。形を変えたら上げ、readRoot で古い形を読み替える */
-const dataVersion = 1;
+/**
+ * 保存形式のバージョン。形を変えたら上げ、readRoot / readGhost で古い形を読み替える。
+ * 1: 記録の有効判定に物理のバージョン番号 (physicsVersion: number) を使っていた形
+ * 2: 有効判定をバージョン文字列 (recordVersion: string) にした形
+ */
+const dataVersion = 2;
+const knownVersions: readonly number[] = [1, 2];
+
+/**
+ * 自己ベスト・ゴーストが今のゲームで使えるかを表す文字列 (例: `${physicsVersion}-${trackVersion}`)。
+ * 保存時と違えば、読むときに破棄する。数値を渡した場合は文字列にして比べる
+ */
+export type RecordVersion = string | number;
 
 /** コースごとの自己ベスト */
 export interface CourseBest {
@@ -9,7 +20,7 @@ export interface CourseBest {
 }
 
 interface CourseEntry extends CourseBest {
-  physicsVersion: number;
+  recordVersion: string;
 }
 
 interface SaveRoot {
@@ -21,7 +32,7 @@ interface SaveRoot {
 
 interface GhostEntry {
   version: number;
-  physicsVersion: number;
+  recordVersion: string;
   /** ゴーストをシリアライズした文字列 (形式は shared/ghost.ts が決める) */
   data: string;
 }
@@ -29,12 +40,17 @@ interface GhostEntry {
 /**
  * localStorage のセーブデータ: 設定、コースごとの自己ベスト、コースごとのゴースト。
  * 読み書きは try/catch で囲み、保存できない環境 (プライベートモード・容量不足) でも起動中はメモリ上の値を保つ。
- * 自己ベストとゴーストは物理のバージョン番号と一緒に保存し、読むときに違えば破棄する。
+ * 自己ベストとゴーストはバージョン文字列と一緒に保存し、読むときに違えば破棄する。
  * ゴーストは 1 周 約 18 KB あるため、失敗しても他のデータを巻き込まないよう別のキーに置く。
+ * 知らない形式 (新しい版で保存されたなど) のデータを見つけたら、それを壊さないよう、そのキーには書き込まない。
  */
 export class SaveData {
   private root: SaveRoot | null = null;
+  /** 設定・自己ベストのキーに書き込んでよいか (知らない形式を読んだら false) */
+  private isRootWritable = true;
   private readonly ghosts = new Map<string, GhostEntry | null>();
+  /** 知らない形式のゴーストが入っているコース (そのキーには書き込まない) */
+  private readonly foreignGhosts = new Set<string>();
 
   constructor(private readonly keyPrefix: string) {}
 
@@ -53,38 +69,47 @@ export class SaveData {
 
   // ---- 自己ベスト ----
 
-  /** コースの自己ベスト。記録がない・物理のバージョンが違う (破棄する) ときは null */
-  loadBest(courseId: string, physicsVersion: number): CourseBest | null {
-    const entry = this.getCourse(courseId, physicsVersion);
+  /** コースの自己ベスト。記録がない・バージョンが違う (破棄する) ときは null */
+  loadBest(courseId: string, version: RecordVersion): CourseBest | null {
+    const entry = this.getCourse(courseId, String(version));
     return entry ? { bestLap: entry.bestLap, bestSectors: [...entry.bestSectors] } : null;
   }
 
-  saveBest(courseId: string, physicsVersion: number, best: CourseBest): void {
+  saveBest(courseId: string, version: RecordVersion, best: CourseBest): void {
+    const recordVersion = String(version);
     const root = this.getRoot();
     const old = root.courses[courseId];
-    if (old && old.physicsVersion !== physicsVersion) this.discardGhost(courseId);
-    root.courses[courseId] = { physicsVersion, bestLap: best.bestLap, bestSectors: [...best.bestSectors] };
+    if (old && old.recordVersion !== recordVersion) this.discardGhost(courseId);
+    root.courses[courseId] = { recordVersion, bestLap: best.bestLap, bestSectors: [...best.bestSectors] };
     this.writeRoot();
   }
 
   // ---- ゴースト ----
 
-  /** コースのゴースト (シリアライズした文字列)。ない・物理のバージョンが違う (破棄する) ときは null */
-  loadGhost(courseId: string, physicsVersion: number): string | null {
+  /** コースのゴースト (シリアライズした文字列)。ない・バージョンが違う (破棄する) ときは null */
+  loadGhost(courseId: string, version: RecordVersion): string | null {
     const entry = this.getGhostEntry(courseId);
     if (!entry) return null;
-    if (entry.physicsVersion !== physicsVersion) {
+    if (entry.recordVersion !== String(version)) {
       this.discardGhost(courseId);
       return null;
     }
     return entry.data;
   }
 
-  /** 保存できたら true。失敗しても起動中は loadGhost で読める */
-  saveGhost(courseId: string, physicsVersion: number, data: string): boolean {
-    const entry: GhostEntry = { version: dataVersion, physicsVersion, data };
+  /**
+   * 保存できたら true。失敗しても起動中は loadGhost で読める。
+   * 失敗したときは古いゴーストを消す (次の起動で自己ベストより遅いゴーストを読まないように)
+   */
+  saveGhost(courseId: string, version: RecordVersion, data: string): boolean {
+    const entry: GhostEntry = { version: dataVersion, recordVersion: String(version), data };
+    this.getGhostEntry(courseId);
     this.ghosts.set(courseId, entry);
-    return writeItem(this.ghostKey(courseId), JSON.stringify(entry));
+    if (this.foreignGhosts.has(courseId)) return false;
+    const key = this.ghostKey(courseId);
+    if (writeItem(key, JSON.stringify(entry))) return true;
+    removeItem(key);
+    return false;
   }
 
   /** コースの自己ベストとゴーストを消す */
@@ -109,11 +134,11 @@ export class SaveData {
     return this.root;
   }
 
-  private getCourse(courseId: string, physicsVersion: number): CourseEntry | null {
+  private getCourse(courseId: string, recordVersion: string): CourseEntry | null {
     const root = this.getRoot();
     const entry = root.courses[courseId];
     if (!entry) return null;
-    if (entry.physicsVersion !== physicsVersion) {
+    if (entry.recordVersion !== recordVersion) {
       delete root.courses[courseId];
       this.writeRoot();
       this.discardGhost(courseId);
@@ -123,19 +148,31 @@ export class SaveData {
   }
 
   private getGhostEntry(courseId: string): GhostEntry | null {
-    if (!this.ghosts.has(courseId)) this.ghosts.set(courseId, readGhost(this.ghostKey(courseId)));
+    if (!this.ghosts.has(courseId)) {
+      const data = parseJson(readItem(this.ghostKey(courseId)));
+      if (isForeign(data)) {
+        console.warn(`ゴーストの形式が違うため読み込みません (上書きもしません): ${courseId}`);
+        this.foreignGhosts.add(courseId);
+      }
+      this.ghosts.set(courseId, toGhostEntry(data));
+    }
     return this.ghosts.get(courseId) ?? null;
   }
 
   private discardGhost(courseId: string): void {
+    this.getGhostEntry(courseId);
     this.ghosts.set(courseId, null);
-    removeItem(this.ghostKey(courseId));
+    if (!this.foreignGhosts.has(courseId)) removeItem(this.ghostKey(courseId));
   }
 
   private readRoot(): SaveRoot {
     const root: SaveRoot = { version: dataVersion, settings: null, courses: {} };
     const data = parseJson(readItem(this.rootKey));
-    if (isRecord(data) && data.version === dataVersion) {
+    if (isForeign(data)) {
+      // 新しい版で保存されたなどで読めない。既定値で続け、ユーザーのデータを壊さないよう書き込まない
+      console.warn('セーブデータの形式が違うため読み込みません (上書きもしません)');
+      this.isRootWritable = false;
+    } else if (isRecord(data)) {
       if (isRecord(data.settings)) root.settings = data.settings;
       if (isRecord(data.courses)) {
         for (const [id, value] of Object.entries(data.courses)) {
@@ -143,11 +180,8 @@ export class SaveData {
           if (entry) root.courses[id] = entry;
         }
       }
-    } else if (data !== null) {
-      // 知らないバージョン (新しい版で保存されたなど) は読まずに既定値で続ける。上書きは保存時まで起きない
-      console.warn('セーブデータの形式が違うため読み込みません');
     }
-    if (root.settings === null) {
+    if (root.settings === null && this.isRootWritable) {
       // セーブデータ導入前の設定のキー
       const legacy = parseJson(readItem(`${this.keyPrefix}.settings`));
       if (isRecord(legacy)) root.settings = legacy;
@@ -156,30 +190,39 @@ export class SaveData {
   }
 
   private writeRoot(): void {
+    if (!this.isRootWritable) return;
     writeItem(this.rootKey, JSON.stringify(this.getRoot()));
   }
 }
 
+/** 形式のバージョンが付いているが、このコードの知らないものか (壊れたデータ・空は false) */
+function isForeign(data: unknown): boolean {
+  return isRecord(data) && !(typeof data.version === 'number' && knownVersions.includes(data.version));
+}
+
+/** 形式 1 の physicsVersion (数値) は、その数値の文字列として読む */
+function toRecordVersion(value: Record<string, unknown>): string | null {
+  if (typeof value.recordVersion === 'string') return value.recordVersion;
+  if (typeof value.physicsVersion === 'number') return String(value.physicsVersion);
+  return null;
+}
+
 function toCourseEntry(value: unknown): CourseEntry | null {
-  if (!isRecord(value) || typeof value.physicsVersion !== 'number') return null;
+  if (!isRecord(value)) return null;
+  const recordVersion = toRecordVersion(value);
+  if (recordVersion === null) return null;
   const bestLap = isPositiveNumber(value.bestLap) ? value.bestLap : null;
   const bestSectors = Array.isArray(value.bestSectors)
     ? value.bestSectors.map((v: unknown) => (isPositiveNumber(v) ? v : null))
     : [];
-  return { physicsVersion: value.physicsVersion, bestLap, bestSectors };
+  return { recordVersion, bestLap, bestSectors };
 }
 
-function readGhost(key: string): GhostEntry | null {
-  const data = parseJson(readItem(key));
-  if (
-    isRecord(data) &&
-    data.version === dataVersion &&
-    typeof data.physicsVersion === 'number' &&
-    typeof data.data === 'string'
-  ) {
-    return { version: dataVersion, physicsVersion: data.physicsVersion, data: data.data };
-  }
-  return null;
+function toGhostEntry(data: unknown): GhostEntry | null {
+  if (!isRecord(data) || isForeign(data) || typeof data.data !== 'string') return null;
+  const recordVersion = toRecordVersion(data);
+  if (recordVersion === null) return null;
+  return { version: dataVersion, recordVersion, data: data.data };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
