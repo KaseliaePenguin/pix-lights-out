@@ -20,9 +20,9 @@
 
 | ファイル名 | 用途 | 長さ | ループ | バリエーション | 優先度 | 作成状況 |
 | --- | --- | --- | --- | --- | --- | --- |
-| race-theme.ogg | レース中 | 60〜90 秒 | あり | 1 | 高 | 生成済み (試聴待ち、71.0 秒ループ) |
-| menu-theme.ogg | メニュー画面 | 60〜90 秒 | あり | 1 | 中 | 生成済み (試聴待ち、85.7 秒ループ) |
-| qualifying-theme.ogg | 予選 (タイムアタック) | 60〜90 秒 | あり | 1 | 中 (無い間は race-theme を流用) | 生成済み (試聴待ち、78.8 秒ループ) |
+| race-theme.ogg | レース中 | 60〜90 秒 | あり | 1 | 高 | 生成済み (v2 オーケストラ + ロック版、試聴待ち、71.7 秒ループ) |
+| menu-theme.ogg | メニュー画面 | 60〜90 秒 | あり | 1 | 中 | 生成済み (v2、試聴待ち、71.1 秒ループ) |
+| qualifying-theme.ogg | 予選 (タイムアタック) | 60〜90 秒 | あり | 1 | 中 (無い間は race-theme を流用) | 生成済み (v2、試聴待ち、69.5 秒ループ) |
 | result-theme.ogg | リザルト画面 | 30〜60 秒 | あり | 1 | 中 | 未作成 |
 | finish-jingle.ogg | ゴール (チェッカーフラッグ) 時 | 3〜5 秒 | なし | 1 | 高 | 未作成 |
 | win-jingle.ogg | 優勝・ポールポジション獲得時 (finish-jingle の代わりに鳴らす) | 4〜6 秒 | なし | 1 | 中 | 未作成 |
@@ -135,9 +135,9 @@
 
 | ファイル | 元音声 (seed-番号) | プロンプト (要約) | 加工 |
 | --- | --- | --- | --- |
-| race-theme | race-theme-2833509042-2 | 共通タグ + `fast tempo, 150 bpm, energetic, driving bassline, clean mix, light` (100 秒) | 12〜85 秒を切り出し、リズムの周期が合う長さ (71.0 秒) でループ化 |
-| qualifying-theme | qualifying-theme-1900216363-1 | 共通タグ + `130 bpm, tense, focused, minimal, driving bassline, light drums, clean mix` | 12〜92.8 秒、78.8 秒ループ |
-| menu-theme | menu-theme-1233609196-2 | 共通タグ + `mid tempo, 120 bpm, cool, night drive, anticipation, warm pads, catchy melody` | 4〜91.7 秒、85.7 秒ループ |
+| race-theme (v2) | race-theme-v2-641000237-3 | 共通タグ (下記) + `fast tempo, 150 bpm, energetic, driving, adrenaline, bright brass stabs, clean mix, light low mids` (100 秒) | 350 Hz 付近を -3 dB (エンジン音の帯域を空ける) のあと 16〜89.7 秒、71.7 秒ループ |
+| menu-theme (v2) | menu-theme-v2-934448438-3 | 共通タグ + `120 bpm, majestic, triumphant, grand, broad brass theme, steady pulse, warm, clean mix` | 16〜89.1 秒、71.1 秒ループ |
+| qualifying-theme (v2) | qualifying-theme-v2-1092852604-3 | 共通タグ + `135 bpm, tense, suspenseful, focused, restrained, low staccato strings, ticking synth pulse, light drums, building tension, clean mix` | 16〜87.5 秒、69.5 秒ループ |
 | engine-player-loop | test-engine-loop-11 | 試作と同じ | `--loop --crossfade 0.5` |
 | engine-player-decel-loop | engine-player-decel-loop-490632532-2 | `formula racing car engine at steady mid rpm with throttle off, engine braking, muffled low burble with light crackles, steady ...` | 1〜3.5 秒、crossfade 0.5 |
 | tire-squeal-loop-1 / -2 | tire-squeal-loop-3374578360-3 / -2 | `race car tires squealing continuously on asphalt during a long sustained cornering slide, steady ...` | -1: 2.25〜5.9 秒 / -2: 1.4〜3.7 秒 |
@@ -151,4 +151,5 @@
 | lap-complete / sector-time / sector-best | lap-complete-3119191679-1 / sector-time-4129768023-1 / sector-best-2724617714-3 | `retro 8-bit video game checkpoint chime` / `notification blip` / `high score chime, rising arpeggio` | 頭の音だけ切り出し |
 
 - 短いワンショット (0.4 秒未満) は LUFS を測れないため、RMS -15 dB (ピーク -1.5 dBFS 以下) に揃えた。drs-open/close はピーク制限で RMS -23〜-26 dB
-- BGM の別候補は `assets-src/candidates/bgm/*-alt.ogg` (試聴比較用)
+- BGM v2 の共通タグ: `cinematic orchestral rock, heroic brass, fast staccato string ostinato, powerful rock drums, pulsing synth bass, sports broadcast opening theme, uplifting` (実在の番組名・作曲者名は入れていない)
+- BGM の別候補は `assets-src/candidates/bgm/*-v2-alt.ogg`。旧版 (チップチューン + シンセウェーブ) は `*-v1-synthwave*.ogg` に退避 (旧版の元音声: race-theme-2833509042-2、qualifying-theme-1900216363-1、menu-theme-1233609196-2)

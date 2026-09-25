@@ -7,6 +7,7 @@
 - 走行系 SE はリアル寄りでよいが、**大きく耳障りにならないよう控えめにする** (「4. 音量バランス」の「走行系の抑え方」)
 - レース中の BGM は控えめ (ゲイン 0.4)、スタートシグナル中は BGM を止める演出で OK
 - ピット関連の優先度は、game-designer の仕様でピットを入れる段階が決まってから決める
+- (2026-09-25 追加) BGM は「実在のモータースポーツ中継のメインテーマ (オーケストラ + ロック) の雰囲気をオマージュした曲」に変更する。**旋律・特徴的なフレーズ・和音進行は独自**にし、取り入れるのは雰囲気 (編成、テンポ感、盛り上がり方、ジャンル) だけ。既存曲に近すぎないかはユーザーの試聴で確認する
 
 必要な BGM・SE の一覧と作成状況は [sound-list.md](sound-list.md)、生成ツールの使い方は [../setup/comfyui.md](../setup/comfyui.md)。
 
@@ -14,8 +15,8 @@
 
 | 項目 | 方針 |
 | --- | --- |
-| コンセプト | 「90 年代のアーケード / 16 ビット機のレースゲーム」。ピクセルアートの見た目に合わせ、BGM はレトロな電子音、SE は実車らしさを残しつつ短く・乾いた音にする |
-| BGM のジャンル | チップチューン + シンセウェーブ (FM シンセ風のベース、アルペジオ、打ち込みドラム)。歌なし |
+| コンセプト | 見た目は「90 年代のアーケード / 16 ビット機のレースゲーム」。BGM はレース中継のオープニングのような高揚感のあるシネマティックな曲、SE は実車らしさを残しつつ短く・乾いた音、UI 系はレトロな電子音にする |
+| BGM のジャンル | シネマティック・オーケストラ + ロック (勇ましい金管、弦の速い刻み、力強いロックドラム、シンセのパルス)。モータースポーツ中継のメインテーマの**雰囲気のオマージュ**だが、旋律・フレーズ・和音進行は独自。歌なし |
 | SE の質感 | 走行系 (エンジン・タイヤ・接触・コース外) は実車寄りのリアルな音。UI・スタートシグナル・ラップ通知などの「中継・画面」系はチップチューン寄りの電子音 |
 | 残響 | 全体に残響 (リバーブ) なしの乾いた音で作る。距離感はゲーム側の音量・こもり (ローパス) で出す |
 | チャンネル | BGM はステレオ、SE はすべてモノラル (左右の定位はゲーム側で付ける) |
@@ -23,7 +24,7 @@
 
 ### ピクセルアートとの統一感
 
-- 「見た目はレトロ、音もレトロ」を BGM と UI 系の SE で担う。走行系の SE まで 8 ビット音にすると、グリップ限界のスキール音やスリップストリームなど**遊びの情報を伝える音が聞き分けにくくなる**ため、走行系は実車寄りにする
+- レトロさは UI 系の SE が担い、BGM は「中継の高揚感」を担う (2026-09-25 の方針変更で BGM はチップチューンをやめた)。走行系の SE まで 8 ビット音にすると、グリップ限界のスキール音やスリップストリームなど**遊びの情報を伝える音が聞き分けにくくなる**ため、走行系は実車寄りにする
 - 走行系 SE は「高音質な実録音」ではなく「アーケード筐体から鳴る音」を目指す: 短く、アタックがはっきりし、低音を盛りすぎない
 - 実車寄りの SE が浮いて聞こえる場合は、変換時に軽いビット落とし・高域カットを入れる処理の追加を検討する (現状の変換スクリプトには無い。必要になったら提案する)
 
@@ -31,14 +32,15 @@
 
 | 曲 | 画面 | テンポ | 雰囲気 | 長さ・ループ |
 | --- | --- | --- | --- | --- |
-| menu-theme | メニュー | 115〜125 bpm | 落ち着いたシンセウェーブ。夜の高速道路、期待感 | 60〜90 秒ループ |
-| qualifying-theme | 予選 | 130 bpm 前後 | 抑えた緊張感。ドラムとベース中心、メロディは控えめ | 60〜90 秒ループ |
-| race-theme | レース | 150 bpm (テスト生成で試聴 OK) | 疾走感。ドライビングベース + アルペジオ | 60〜90 秒ループ |
+| menu-theme | メニュー | 120 bpm 前後 | 堂々としたテーマ。同じ世界観で、ループで聴き疲れしない落ち着き | 60〜90 秒ループ |
+| qualifying-theme | 予選 | 135 bpm 前後 | 緊張感のある抑えめの版。低弦の刻みとシンセのパルス中心、金管は控えめ | 60〜90 秒ループ |
+| race-theme | レース | 150 bpm 前後 | いちばん勢いのある版。金管のスタブ、弦の刻み、ロックドラム | 60〜90 秒ループ |
 | result-theme | リザルト | 100〜110 bpm | 達成感、ゆったり | 30〜60 秒ループ |
 | ジングル類 | ゴール・優勝など | 曲に合わせる | 短いファンファーレ | 2〜6 秒、ループなし |
 
-- **メニューとレースで雰囲気を分ける**: メニューは中速・余裕のある音、レースは速く前のめり
-- **レース中の BGM はエンジン音・スキール音の邪魔をしない**: 中低域 (ベース・キック以外の 200〜800 Hz 付近) を詰め込まない。プロンプトに「clean mix, light」を入れ、厚いパッドや歪んだギターは避ける
+- **3 曲は同じ世界観 (オーケストラ + ロック + シンセ) でそろえ、勢いで分ける**: レース > メニュー (堂々) > 予選 (抑えめ・緊張)
+- **オマージュの線引き**: 取り入れるのは編成・テンポ感・盛り上がり方・ジャンルだけ。原曲のメロディ・特徴的なフレーズ・和音進行はなぞらない。生成プロンプトに実在の番組名・シリーズ名・作曲者名を入れない。似すぎていないかはユーザーの試聴で確認し、似ていれば別 seed で作り直す
+- **レース中の BGM はエンジン音・スキール音の邪魔をしない**: 中低域 (ベース・キック以外の 200〜800 Hz 付近) を詰め込まない。オーケストラは中低域が厚くなりやすいので、race-theme は金管のスタブ・高めの弦の刻みを主にし、プロンプトに「clean mix, light low mids」を入れる。歪んだギターは避ける
 - ピット・スタートシグナルには専用 BGM を作らない。スタートシグナル中は BGM を止めるか大きく下げ (ダッキング)、消灯と同時にレース BGM を始める (実況中継の「静寂 → 爆発」の演出)
 - ACE-Step の出力は曲頭にイントロ、末尾にフェードが入りやすい。変換時に `--start` / `--end` で切り落としてからループ化する
 
@@ -154,14 +156,15 @@
 
 | 区分 | タグ |
 | --- | --- |
-| 共通 | `chiptune, synthwave, retro 16-bit, racing game, FM synth bass, arpeggio, electronic drums` |
-| menu-theme | `mid tempo, 120 bpm, cool, night drive, anticipation, warm pads, catchy melody` |
-| qualifying-theme | `130 bpm, tense, focused, minimal, driving bassline, light drums, clean mix` |
-| race-theme | `fast tempo, 150 bpm, energetic, driving bassline, arpeggio, clean mix, light` (テスト生成のタグを基本にする) |
+| 共通 | `cinematic orchestral rock, heroic brass, fast staccato string ostinato, powerful rock drums, pulsing synth bass, sports broadcast opening theme, uplifting` |
+| menu-theme | `120 bpm, majestic, triumphant, grand, broad brass theme, steady pulse, warm, clean mix` |
+| qualifying-theme | `135 bpm, tense, suspenseful, focused, restrained, low staccato strings, ticking synth pulse, light drums, building tension, clean mix` |
+| race-theme | `fast tempo, 150 bpm, energetic, driving, adrenaline, bright brass stabs, clean mix, light low mids` |
 | result-theme | `105 bpm, triumphant, relaxed, bright melody, celebration` |
 | ジングル | `short fanfare, victory jingle, bright, 4 seconds` (生成秒数を 6〜8 秒にし、変換時に切り出す) |
 
-- 避けるタグ: `vocals, choir, singing, rap, spoken`, `orchestral, cinematic, epic`, `heavy metal, distorted guitar` (中低域が厚くなりエンジン音を隠す), `lofi` (レース中に遅く聞こえる), `ambient` (レース用)
+- 避けるタグ: `vocals, choir, singing, rap, spoken`, `heavy metal, distorted guitar` (中低域が厚くなりエンジン音を隠す), `lofi` (レース中に遅く聞こえる), `ambient` (レース用)、実在の番組名・シリーズ名・作曲者名 (F1 など)
+- 旧版 (チップチューン + シンセウェーブ、2026-09-25 生成) は `assets-src/candidates/bgm/*-v1-synthwave*.ogg` に退避してある
 - ACE-Step にネガティブプロンプトは無い (スクリプトで無効化している)。避けたい要素はタグに書かないことで避ける
 
 ### SE (Stable Audio Open、英語の自然文)
