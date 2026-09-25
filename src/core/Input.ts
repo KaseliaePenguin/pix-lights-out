@@ -4,7 +4,7 @@
  */
 const defaultBlockedKeys: readonly string[] = [
   'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR',
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyZ', 'KeyX',
   'Space', 'Enter', 'Escape', 'Tab', 'Backspace', 'F3',
 ];
 

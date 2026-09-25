@@ -24,12 +24,12 @@ export interface KeyBindings {
   reset: readonly string[];
 }
 
-/** game-design.md 5.1 節 */
+/** game-design.md 5.1 節。アクセルとブレーキを左手の別の指に分け、曲がりながらブレーキを踏めるようにする */
 export const defaultKeyBindings: KeyBindings = {
-  throttle: ['ArrowUp', 'KeyW'],
-  brake: ['ArrowDown', 'KeyS'],
-  left: ['ArrowLeft', 'KeyA'],
-  right: ['ArrowRight', 'KeyD'],
+  throttle: ['KeyZ'],
+  brake: ['KeyX'],
+  left: ['ArrowLeft'],
+  right: ['ArrowRight'],
   drs: ['Space'],
   reset: ['KeyR'],
 };

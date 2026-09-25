@@ -9,10 +9,10 @@ import { wasMenuBackPressed, wasMenuConfirmPressed } from './menuKeys';
 // game-design.md 5.1 節。HUD フォントに小文字・日本語がないため英大文字で書く
 // TODO(gamepad): M3 でゲームパッドの割り当ての列を足す (5.2 節)
 const controlRows: ReadonlyArray<readonly [string, string]> = [
-  ['ACCELERATE', 'UP / W'],
-  ['BRAKE / REVERSE', 'DOWN / S'],
-  ['STEER LEFT', 'LEFT / A'],
-  ['STEER RIGHT', 'RIGHT / D'],
+  ['ACCELERATE', 'Z'],
+  ['BRAKE / REVERSE', 'X'],
+  ['STEER LEFT', 'LEFT'],
+  ['STEER RIGHT', 'RIGHT'],
   ['DRS', 'SPACE'],
   ['RESET TO TRACK', 'R'],
   ['PAUSE', 'ESC'],
