@@ -30,6 +30,7 @@ export class TrackRenderer {
       grass: readPixels(assets.getImage('tile-grass')),
       gravel: readPixels(assets.getImage('tile-gravel')),
       pit: readPixels(assets.getImage('tile-pit')),
+      font: readPixels(assets.getImage('ui-font-5x7')),
     };
     this.painter = new TrackPainter(track, textures);
     this.chunksX = Math.ceil(this.painter.worldDotsWidth / chunkSize);

@@ -6,7 +6,7 @@ import { SurfaceCode } from '../shared/Track';
 const capacity = 2000;
 /** この秒数で消える */
 const lifeTime = 20;
-/** これより古いものは点線にして薄く見せる (半透明を使わないため) */
+/** これより古いものは薄い色で描く (style-guide.md §5「タイヤ痕の消え方」。半透明・間引きは使わない) */
 const fadeStart = 14;
 /** 前のフレームの同じ車輪とみなす距離 (px)。左右の車輪の間隔 16 px より小さくする */
 const linkDistance = 14;
@@ -14,6 +14,7 @@ const linkDistance = 14;
 const linkTime = 0.1;
 const recentCount = 8;
 const markColor = '#2a2a33';
+const fadedColor = '#313244';
 
 /**
  * タイヤ痕 (style-guide.md §5 のレイヤー 10)。車輪の位置を毎フレーム add すると、
@@ -76,29 +77,41 @@ export class TireMarks {
     this.recentHead = (this.recentHead + 1) % recentCount;
   }
 
-  /** カメラが写す範囲のタイヤ痕を描く (コースの後、車の前に呼ぶ) */
+  /** カメラが写す範囲のタイヤ痕を描く (コースの後、車の前に呼ぶ)。アスファルトとピットレーンの上だけに描く */
   render(layer: WorldLayer): void {
     const ctx = layer.ctx;
     const now = this.time;
+    const originX = layer.viewLeft / 2;
+    const originY = layer.viewTop / 2;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = markColor;
-    for (let n = 0; n < this.count; n++) {
+    let current = '';
+    // 古いものから描き、新しい痕が上に重なるようにする
+    for (let n = this.count - 1; n >= 0; n--) {
       const k = (this.head - 1 - n + capacity) % capacity;
       const age = now - this.born[k];
-      if (age > lifeTime) break;
+      if (age > lifeTime) continue;
       if (!layer.isVisible((this.x0[k] + this.x1[k]) / 2, (this.y0[k] + this.y1[k]) / 2, 32)) continue;
+      const style = age > fadeStart ? fadedColor : markColor;
+      if (style !== current) {
+        ctx.fillStyle = style;
+        current = style;
+      }
       const ax = layer.dotX(this.x0[k]);
       const ay = layer.dotY(this.y0[k]);
       const bx = layer.dotX(this.x1[k]);
       const by = layer.dotY(this.y1[k]);
       const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
-      const dashed = age > fadeStart;
       for (let s = 0; s <= steps; s++) {
         const px = steps === 0 ? ax : Math.round(ax + ((bx - ax) * s) / steps);
         const py = steps === 0 ? ay : Math.round(ay + ((by - ay) * s) / steps);
-        // 点線はワールドに固定した市松の位置だけ残す (動かしても模様が揺れないように)
-        if (dashed && ((px + layer.viewLeft / 2 + py + layer.viewTop / 2) & 3) !== 0) continue;
-        ctx.fillRect(px - 1, py - 1, 2, 2);
+        // 2×2 ドットの点のうち、アスファルト・ピットレーンの上のドットだけを塗る
+        for (let oy = -1; oy <= 0; oy++) {
+          for (let ox = -1; ox <= 0; ox++) {
+            const wx = (px + ox + originX) * 2 + 1;
+            const wy = (py + oy + originY) * 2 + 1;
+            if (isMarkable(this.track.surfaceCodeAt(wx, wy))) ctx.fillRect(px + ox, py + oy, 1, 1);
+          }
+        }
       }
     }
   }
@@ -109,4 +122,9 @@ export class TireMarks {
     this.count = 0;
     this.recentTime.fill(-Infinity);
   }
+}
+
+/** タイヤ痕を描く路面 (アスファルト・白線・ピットレーン)。縁石・芝生・砂利には描かない */
+function isMarkable(code: number): boolean {
+  return code === SurfaceCode.asphalt || code === SurfaceCode.line || code === SurfaceCode.pit;
 }
