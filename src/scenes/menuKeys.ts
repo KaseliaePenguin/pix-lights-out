@@ -27,13 +27,20 @@ export function wasMenuBackPressed(input: Input): boolean {
   return input.wasPressed('Escape');
 }
 
-/** 選べる項目だけを上下に移動する (端で折り返す)。選べる項目がなければ現在位置のまま */
-export function moveMenuCursor(current: number, step: number, isEnabled: readonly boolean[]): number {
-  const count = isEnabled.length;
+/**
+ * 選べる項目だけを上下に移動する (端で折り返す)。選べる項目がなければ現在位置のまま。
+ * isSelectable を省くと全項目を選べるものとして扱う
+ */
+export function moveMenuCursor(
+  current: number,
+  step: number,
+  count: number,
+  isSelectable: (index: number) => boolean = () => true,
+): number {
   let index = current;
   for (let i = 0; i < count; i++) {
     index = (index + step + count) % count;
-    if (isEnabled[index]) return index;
+    if (isSelectable(index)) return index;
   }
   return current;
 }

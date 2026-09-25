@@ -34,7 +34,8 @@ export class BitmapFont {
   private sheet: HTMLImageElement | null = null;
   /** 画像に入っている文字数 (4 行なら 64、5 行なら 80) */
   private sheetGlyphCount = 0;
-  private readonly tinted = new Map<string, HTMLCanvasElement>();
+  /** 色ごとに塗り替えた字形画像。塗り替えられなかった色は null (システムフォントで代用) */
+  private readonly tinted = new Map<string, HTMLCanvasElement | null>();
 
   constructor(src: string) {
     const image = new Image();
@@ -42,13 +43,23 @@ export class BitmapFont {
       if (image.width >= sheetCols * cellW && image.height >= (baseGlyphCount / sheetCols) * cellH) {
         this.sheet = image;
         this.sheetGlyphCount = Math.floor(image.height / cellH) * sheetCols;
+      } else {
+        console.warn(`フォント画像の大きさが想定と違うため、代用フォントで描きます: ${src} (${image.width}x${image.height})`);
       }
+    };
+    image.onerror = () => {
+      console.warn(`フォント画像を読み込めないため、代用フォントで描きます: ${src}`);
     };
     image.src = src;
   }
 
   hasImage(): boolean {
     return this.sheet !== null;
+  }
+
+  /** 1 文字の送り幅 (px) */
+  advance(scale = 2): number {
+    return advanceDots * scale;
   }
 
   /** 文字列の描画幅 (px)。末尾の 1 ドットの字間は含めない */
@@ -68,9 +79,9 @@ export class BitmapFont {
     const scale = options.scale ?? 2;
     const color = options.color ?? '#cdd6f4';
     const align = options.align ?? 'left';
-    const upper = text.toUpperCase();
-    const codes = toGlyphCodes(upper);
-    const width = this.measure(upper, scale);
+    const codes = toGlyphCodes(text.toUpperCase());
+    if (codes.length === 0) return;
+    const width = (codes.length * advanceDots - 1) * scale;
     let left = x;
     if (align === 'center') left = x - width / 2;
     else if (align === 'right') left = x - width;
@@ -78,47 +89,44 @@ export class BitmapFont {
     left = Math.round(left / 2) * 2;
     const top = Math.round(y / 2) * 2;
 
+    const tintedSheet = this.sheet ? this.getTintedSheet(this.sheet, color) : null;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = color;
+    ctx.font = `bold ${7 * scale}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
     for (let i = 0; i < codes.length; i++) {
       const code = codes[i];
       if (code === 0x20) continue;
       const glyphX = left + i * advanceDots * scale;
-      if (this.sheet && code - firstCode < this.sheetGlyphCount) {
-        this.drawGlyphFromSheet(ctx, code, glyphX, top, scale, color);
+      const index = code - firstCode;
+      if (tintedSheet && index < this.sheetGlyphCount) {
+        const sx = (index % sheetCols) * cellW;
+        const sy = Math.floor(index / sheetCols) * cellH;
+        ctx.drawImage(tintedSheet, sx, sy, glyphW, glyphH, glyphX, top, glyphW * scale, glyphH * scale);
       } else if (extraPatterns[code]) {
-        drawPattern(ctx, extraPatterns[code], glyphX, top, scale, color);
+        drawPattern(ctx, extraPatterns[code], glyphX, top, scale);
       } else {
-        drawSystemGlyph(ctx, String.fromCharCode(code), glyphX, top, scale, color);
+        // 代用: 等幅のシステムフォントで送り幅の中央に描く
+        ctx.fillText(String.fromCharCode(code), glyphX + (glyphW / 2) * scale, top + glyphH * scale);
       }
     }
-  }
-
-  private drawGlyphFromSheet(
-    ctx: CanvasRenderingContext2D,
-    code: number,
-    x: number,
-    top: number,
-    scale: number,
-    color: string,
-  ): void {
-    const sheet = this.getTintedSheet(color);
-    const index = code - firstCode;
-    const sx = (index % sheetCols) * cellW;
-    const sy = Math.floor(index / sheetCols) * cellH;
-    const smoothing = ctx.imageSmoothingEnabled;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(sheet, sx, sy, glyphW, glyphH, x, top, glyphW * scale, glyphH * scale);
-    ctx.imageSmoothingEnabled = smoothing;
+    ctx.restore();
   }
 
   /** 白い字形の画像を指定色に塗り替えたものを色ごとにキャッシュする */
-  private getTintedSheet(color: string): HTMLCanvasElement {
+  private getTintedSheet(sheet: HTMLImageElement, color: string): HTMLCanvasElement | null {
     const cached = this.tinted.get(color);
-    if (cached) return cached;
-    const sheet = this.sheet as HTMLImageElement;
+    if (cached !== undefined) return cached;
     const canvas = document.createElement('canvas');
     canvas.width = sheet.width;
     canvas.height = sheet.height;
-    const c = canvas.getContext('2d') as CanvasRenderingContext2D;
+    const c = canvas.getContext('2d');
+    if (c === null) {
+      this.tinted.set(color, null);
+      return null;
+    }
     c.drawImage(sheet, 0, 0);
     c.globalCompositeOperation = 'source-in';
     c.fillStyle = color;
@@ -141,37 +149,12 @@ function toGlyphCodes(text: string): number[] {
   return codes;
 }
 
-/** 5×7 の字形パターンをドット単位で塗る */
-function drawPattern(
-  ctx: CanvasRenderingContext2D,
-  rows: readonly string[],
-  x: number,
-  top: number,
-  scale: number,
-  color: string,
-): void {
-  ctx.fillStyle = color;
-  rows.forEach((row, y) => {
+/** 5×7 の字形パターンをドット単位で塗る (色は呼び出し側で fillStyle に設定済み) */
+function drawPattern(ctx: CanvasRenderingContext2D, rows: readonly string[], x: number, top: number, scale: number): void {
+  for (let y = 0; y < rows.length; y++) {
+    const row = rows[y];
     for (let dx = 0; dx < row.length; dx++) {
       if (row[dx] === '#') ctx.fillRect(x + dx * scale, top + y * scale, scale, scale);
     }
-  });
-}
-
-/** 画像がない間の代用: 等幅のシステムフォントで 1 文字を送り幅の中央に描く */
-function drawSystemGlyph(
-  ctx: CanvasRenderingContext2D,
-  ch: string,
-  x: number,
-  top: number,
-  scale: number,
-  color: string,
-): void {
-  ctx.save();
-  ctx.fillStyle = color;
-  ctx.font = `bold ${10 * scale}px monospace`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillText(ch, x + (glyphW / 2) * scale, top + glyphH * scale);
-  ctx.restore();
+  }
 }

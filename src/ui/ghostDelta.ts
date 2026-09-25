@@ -1,7 +1,7 @@
 import { colors } from './colors';
 import { formatGhostDelta } from './format';
 import { drawPanel } from './panel';
-import { drawText, measureText } from './text';
+import { drawText, measureText, textAdvance } from './text';
 
 // style-guide.md §6: 前後の車との差と同じ場所 (下中央 x300 y556 w200 h32)
 const panelX = 300;
@@ -26,5 +26,5 @@ export function drawGhostDelta(ctx: CanvasRenderingContext2D, deltaSeconds: numb
   }
   const left = panelX + panelW / 2 - measureText(label + value) / 2;
   drawText(ctx, label, left, panelY + 9, { color: colors.subtext });
-  drawText(ctx, value, left + label.length * 12, panelY + 9, { color });
+  drawText(ctx, value, left + label.length * textAdvance(), panelY + 9, { color });
 }

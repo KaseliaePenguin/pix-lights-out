@@ -43,12 +43,11 @@ export class SettingsScene implements Scene {
       return;
     }
     const { input } = this.game;
-    const enabled = items.map(() => true);
     if (wasMenuUpPressed(input)) {
-      this.selected = moveMenuCursor(this.selected, -1, enabled);
+      this.selected = moveMenuCursor(this.selected, -1, items.length);
       // TODO(audio): ui-cursor
     } else if (wasMenuDownPressed(input)) {
-      this.selected = moveMenuCursor(this.selected, 1, enabled);
+      this.selected = moveMenuCursor(this.selected, 1, items.length);
       // TODO(audio): ui-cursor
     } else if (wasMenuLeftPressed(input)) {
       this.changeValue(-1);

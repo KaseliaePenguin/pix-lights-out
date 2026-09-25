@@ -19,11 +19,6 @@ interface Pending {
   waited: number;
 }
 
-interface Status {
-  message: HudMessage;
-  order: number;
-}
-
 /** 1 回きりのメッセージの表示時間 (秒) */
 const showDuration = 2;
 /** 待たせたメッセージを捨てるまでの時間 (秒) */
@@ -44,41 +39,43 @@ export class MessageQueue {
   private current: HudMessage | null = null;
   private currentRemaining = 0;
   private readonly pending: Pending[] = [];
-  private readonly statuses = new Map<string, Status>();
-  private statusOrder = 0;
+  private readonly statuses = new Map<string, HudMessage>();
+  /** 最優先の状態メッセージ (同じ優先度が複数あれば全部)。配列は使い回す */
+  private readonly topStatuses: HudMessage[] = [];
   private time = 0;
+  /** いま帯に出しているもの (update / push / setStatus で決め直す) */
+  private shown: HudMessage | null = null;
   private shownKey = '';
+  /** 点滅の起点 (表示が切り替わった時刻) */
   private shownSince = 0;
 
   push(message: HudMessage): void {
     if (this.current === null) {
       const status = this.getTopStatus();
-      if (status === null || message.priority <= status.priority) {
-        this.show(message);
-        return;
-      }
+      if (status === null || message.priority <= status.priority) this.show(message);
+      else this.pending.push({ message, waited: 0 });
     } else if (message.priority < this.current.priority) {
       this.show(message);
-      return;
+    } else {
+      this.pending.push({ message, waited: 0 });
     }
-    this.pending.push({ message, waited: 0 });
+    this.refreshShown();
   }
 
   /** key ごとに 1 件。文言だけ変える (カウントダウンなど) 場合も同じ key で呼び直す */
   setStatus(key: string, message: HudMessage | null): void {
-    if (message === null) {
-      this.statuses.delete(key);
-      return;
-    }
-    const existing = this.statuses.get(key);
-    if (existing) existing.message = message;
-    else this.statuses.set(key, { message, order: this.statusOrder++ });
+    if (message === null) this.statuses.delete(key);
+    else this.statuses.set(key, message); // Map は最初に入れた順を保つので、切り替えの順番も保たれる
+    this.refreshTopStatuses();
+    this.refreshShown();
   }
 
   clear(): void {
     this.current = null;
     this.pending.length = 0;
     this.statuses.clear();
+    this.refreshTopStatuses();
+    this.refreshShown();
   }
 
   update(dt: number): void {
@@ -93,8 +90,8 @@ export class MessageQueue {
       }
     }
 
-    for (const item of this.pending) item.waited += dt;
     for (let i = this.pending.length - 1; i >= 0; i--) {
+      this.pending[i].waited += dt;
       if (this.pending[i].waited >= maxWait) this.pending.splice(i, 1);
     }
 
@@ -108,27 +105,14 @@ export class MessageQueue {
       }
       if (best >= 0) this.show(this.pending.splice(best, 1)[0].message);
     }
+
+    this.refreshShown();
   }
 
-  /** いま帯に出すもの。何もなければ null */
+  /** いま帯に出すもの。何もなければ null (状態は変えない) */
   getDisplay(): DisplayedMessage | null {
-    const status = this.getTopStatus();
-    let message: HudMessage | null = null;
-    let key = '';
-    if (this.current !== null && (status === null || this.current.priority <= status.priority)) {
-      message = this.current;
-      key = `once:${message.text}`;
-    } else if (status !== null) {
-      message = status;
-      key = `status:${status.priority}:${status.text.split(' ')[0]}`;
-    }
+    const message = this.shown;
     if (message === null) return null;
-
-    // 点滅の位相は表示が切り替わった時点から数える (カウントの数字が変わっても位相は保つ)
-    if (key !== this.shownKey) {
-      this.shownKey = key;
-      this.shownSince = this.time;
-    }
     const isBlinking = message.priority === 1 && message !== this.current;
     const phase = (this.time - this.shownSince) % blinkPeriod;
     return { text: message.text, color: message.color, isTextVisible: !isBlinking || phase < blinkOn };
@@ -139,15 +123,42 @@ export class MessageQueue {
     this.currentRemaining = showDuration;
   }
 
-  private getTopStatus(): HudMessage | null {
+  /** 帯に出すものを決め、切り替わったら点滅の起点を今にする */
+  private refreshShown(): void {
+    const status = this.getTopStatus();
+    let key = '';
+    if (this.current !== null && (status === null || this.current.priority <= status.priority)) {
+      this.shown = this.current;
+      key = `once:${this.current.text}`;
+    } else if (status !== null) {
+      this.shown = status;
+      // カウントの数字が変わっても同じ表示として扱い、点滅の位相を保つ
+      key = `status:${status.priority}:${status.text.split(' ')[0]}`;
+    } else {
+      this.shown = null;
+    }
+    if (key !== this.shownKey) {
+      this.shownKey = key;
+      this.shownSince = this.time;
+    }
+  }
+
+  private refreshTopStatuses(): void {
+    this.topStatuses.length = 0;
     let topPriority = Infinity;
-    for (const s of this.statuses.values()) topPriority = Math.min(topPriority, s.message.priority);
-    if (topPriority === Infinity) return null;
-    const tops = [...this.statuses.values()]
-      .filter((s) => s.message.priority === topPriority)
-      .sort((a, b) => a.order - b.order);
-    if (tops.length === 1) return tops[0].message;
-    const index = Math.floor(this.time / rotateInterval) % tops.length;
-    return tops[index].message;
+    for (const message of this.statuses.values()) {
+      if (message.priority < topPriority) {
+        topPriority = message.priority;
+        this.topStatuses.length = 0;
+      }
+      if (message.priority === topPriority) this.topStatuses.push(message);
+    }
+  }
+
+  private getTopStatus(): HudMessage | null {
+    const count = this.topStatuses.length;
+    if (count === 0) return null;
+    if (count === 1) return this.topStatuses[0];
+    return this.topStatuses[Math.floor(this.time / rotateInterval) % count];
   }
 }

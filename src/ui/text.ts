@@ -20,3 +20,8 @@ export function drawText(ctx: CanvasRenderingContext2D, text: string, x: number,
 export function measureText(text: string, scale = 2): number {
   return getUiFont().measure(text, scale);
 }
+
+/** 1 文字の送り幅 (px)。等幅なので、n 文字目の位置は left + n × advance */
+export function textAdvance(scale = 2): number {
+  return getUiFont().advance(scale);
+}

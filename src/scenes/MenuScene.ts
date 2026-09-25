@@ -56,13 +56,12 @@ export class MenuScene implements Scene {
 
   update(): void {
     const { input } = this.game;
-    // 選べない項目にもカーソルを止める (何があるかを見せるため)
-    const all = entries.map(() => true);
+    // 選べない項目にもカーソルを止める (何があるかを見せるため)。isSelectable は渡さない
     if (wasMenuUpPressed(input)) {
-      this.selected = moveMenuCursor(this.selected, -1, all);
+      this.selected = moveMenuCursor(this.selected, -1, entries.length);
       // TODO(audio): ui-cursor
     } else if (wasMenuDownPressed(input)) {
-      this.selected = moveMenuCursor(this.selected, 1, all);
+      this.selected = moveMenuCursor(this.selected, 1, entries.length);
       // TODO(audio): ui-cursor
     } else if (wasMenuConfirmPressed(input)) {
       this.confirm();

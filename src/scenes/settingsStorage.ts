@@ -28,7 +28,25 @@ export const defaultSettings: Readonly<Settings> = {
 
 const storageKey = 'pix-lights-out.settings';
 
+/** 起動中の設定。localStorage に保存できない環境でも、起動している間は変更を保つ */
+let cache: Settings | null = null;
+
+/** 呼び出し側が書き換えてもよいよう、毎回コピーを返す */
 export function loadSettings(): Settings {
+  cache ??= readStoredSettings();
+  return { ...cache };
+}
+
+export function saveSettings(settings: Settings): void {
+  cache = { ...settings };
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(cache));
+  } catch {
+    // 保存できなくてもゲームは続ける (キャッシュにより起動中は有効)
+  }
+}
+
+function readStoredSettings(): Settings {
   const settings: Settings = { ...defaultSettings };
   try {
     const raw = window.localStorage.getItem(storageKey);
@@ -45,14 +63,6 @@ export function loadSettings(): Settings {
     // 使えない環境 (プライベートモードなど) や壊れたデータは既定値で続ける
   }
   return settings;
-}
-
-export function saveSettings(settings: Settings): void {
-  try {
-    window.localStorage.setItem(storageKey, JSON.stringify(settings));
-  } catch {
-    // 保存できなくてもゲームは続ける (その回の起動中だけ有効)
-  }
 }
 
 /**

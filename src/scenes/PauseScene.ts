@@ -72,12 +72,11 @@ export class PauseScene implements Scene {
       return;
     }
     const { input } = this.game;
-    const enabled = this.items.map(() => true);
     if (wasMenuUpPressed(input)) {
-      this.selected = moveMenuCursor(this.selected, -1, enabled);
+      this.selected = moveMenuCursor(this.selected, -1, this.items.length);
       // TODO(audio): ui-cursor
     } else if (wasMenuDownPressed(input)) {
-      this.selected = moveMenuCursor(this.selected, 1, enabled);
+      this.selected = moveMenuCursor(this.selected, 1, this.items.length);
       // TODO(audio): ui-cursor
     } else if (wasMenuBackPressed(input)) {
       // TODO(audio): ui-pause (閉じたとき)

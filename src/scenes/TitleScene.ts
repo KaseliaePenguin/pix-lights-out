@@ -10,7 +10,8 @@ import { wasMenuConfirmPressed } from './menuKeys';
 const lampStep = 1;
 const lampHold = 1.5;
 const lampOff = 2;
-const lampCycle = lampStep * 5 + lampHold + lampOff;
+// 5 灯目が点くのは lampStep * 4 秒後
+const lampCycle = lampStep * 4 + lampHold + lampOff;
 
 /**
  * タイトル画面 (6.1 節)。
@@ -39,7 +40,7 @@ export class TitleScene implements Scene {
     ctx.fillRect(0, 0, width, height);
 
     const t = this.time % lampCycle;
-    const lit = t < lampStep * 5 + lampHold ? Math.min(5, Math.floor(t / lampStep) + 1) : 0;
+    const lit = t < lampStep * 4 + lampHold ? Math.min(5, Math.floor(t / lampStep) + 1) : 0;
     drawStartLamps(ctx, lit, (width - startLampsWidth) / 2, 152);
 
     drawText(ctx, 'PIX LIGHTS OUT', width / 2, 256, { scale: 6, color: colors.white, align: 'center' });

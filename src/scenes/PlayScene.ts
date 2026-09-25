@@ -25,7 +25,7 @@ export class PlayScene implements Scene {
   private readonly player: Player;
   private readonly messages = new MessageQueue();
   private pause: PauseScene | null = null;
-  private showGhost = loadSettings().showGhost;
+  private isGhostVisible = loadSettings().showGhost;
   private isDebugVisible = false;
   private isWrongWayDemo = false;
   private isDrsOpen = false;
@@ -71,9 +71,8 @@ export class PlayScene implements Scene {
     drawText(ctx, 'MOVE: WASD  DRS: SPACE  WRONG WAY: R  DEBUG: F3', 12, 12, { color: colors.subtext });
 
     // 見本の区間結果: 経過時間に応じて S1〜S3 が埋まっていく
-    const sectors: TimingResult[] = ['personal', 'slower', 'overall'].map((result, i) =>
-      this.lapTime % 45 > (i + 1) * 15 ? (result as TimingResult) : 'none',
-    );
+    const sampleSectors: readonly TimingResult[] = ['personal', 'slower', 'overall'];
+    const sectors = sampleSectors.map((result, i): TimingResult => (this.lapTime % 45 > (i + 1) * 15 ? result : 'none'));
     drawTimingPanel(ctx, {
       currentLapTime: this.lapTime % 45,
       isCurrentLapInvalid: false,
@@ -89,7 +88,7 @@ export class PlayScene implements Scene {
       gear: this.speed > 0 ? 3 : 'N',
       drs: this.isDrsOpen ? 'active' : 'available',
     });
-    if (this.showGhost) drawGhostDelta(ctx, Math.sin(this.lapTime * 0.5) * 0.5);
+    if (this.isGhostVisible) drawGhostDelta(ctx, Math.sin(this.lapTime * 0.5) * 0.5);
     if (this.isWrongWayDemo) drawCheckpointArrow(ctx, this.lapTime);
     if (this.isDebugVisible) {
       drawDebugPanel(ctx, [
@@ -112,7 +111,7 @@ export class PlayScene implements Scene {
       onRestart: () => game.changeScene(new PlayScene(game)),
       onQuitToMenu: () => game.changeScene(new MenuScene(game)),
       onSettingsClosed: () => {
-        this.showGhost = loadSettings().showGhost;
+        this.isGhostVisible = loadSettings().showGhost;
       },
     });
   }
