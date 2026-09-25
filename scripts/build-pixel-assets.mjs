@@ -100,17 +100,32 @@ const CAR_BLUEPRINT = [
   'KPPPPPPPPK',
   'KKKKKKKKKK',
 ];
-// タイヤの外側の列に 1 ドットのハイライト (前輪 r03、後輪 r15)
-const TYRE_HIGHLIGHTS = [[0, 3], [9, 3], [0, 15], [9, 15]];
 const CAR_COLORS = { K: hex('#11111b'), T: hex('#11111b'), P: hex('#e8322b'), H: hex('#cdd6f4'), '.': CLEAR };
 
 const car = makeImage(24, 24);
 const CAR_X = 7; // 24x24 の中心 (12, 12) が車体の中心 (列 4-5 の間、行 9-10 の間) に来る位置
 const CAR_Y = 2;
 CAR_BLUEPRINT.forEach((row, y) => [...row].forEach((ch, x) => setPx(car, CAR_X + x, CAR_Y + y, CAR_COLORS[ch])));
-for (const [x, y] of TYRE_HIGHLIGHTS) setPx(car, CAR_X + x, CAR_Y + y, hex('#313244'));
 assertPalette(car, 'car-base');
 await save(car, `${IMG_DIR}/car-base.png`);
+
+// ゴースト用のシャドウ表示 (style-guide.md §2): 透明 (または画像の外) に上下左右で接するドットをチーム色、
+// それ以外の不透明なドットを ink にする。car-base のチーム色は赤
+const makeShadow = (src, teamColor) => {
+  const out = makeImage(src.width, src.height);
+  const opaque = (x, y) => x >= 0 && y >= 0 && x < src.width && y < src.height && getPx(src, x, y)[3] > 0;
+  for (let y = 0; y < src.height; y++) {
+    for (let x = 0; x < src.width; x++) {
+      if (!opaque(x, y)) continue;
+      const edge = !opaque(x - 1, y) || !opaque(x + 1, y) || !opaque(x, y - 1) || !opaque(x, y + 1);
+      setPx(out, x, y, edge ? teamColor : hex('#11111b'));
+    }
+  }
+  return out;
+};
+const carGhost = makeShadow(car, hex('#e8322b'));
+assertPalette(carGhost, 'car-base-ghost');
+await save(carGhost, `${IMG_DIR}/car-base-ghost.png`);
 
 // ---- 2. 路面テクスチャ (32x32、上下左右がつながる) ----
 // 粒は「トーラス上で互いに一定距離以上離す」ランダム配置にし、固まり・縦横の並びを避ける
@@ -219,7 +234,7 @@ for (const [name, tile] of [['tile-asphalt', asphalt], ['tile-grass', grass], ['
 }
 
 // ---- 3. 5x7 フォント ui-font-5x7.png ----
-// ASCII 0x20-0x5F の 64 文字。1 行 16 文字 x 4 行、セル 6x8 (字形はセル左上の 5x7、右 1 列・下 1 行は透明)
+// ASCII 0x20-0x5F の 64 文字 + 追加記号 (0x60 = ▲、0x61 = ▼)。1 行 16 文字 x 5 行 (5 行目は先頭 2 セルのみ)、セル 6x8 (字形はセル左上の 5x7、右 1 列・下 1 行は透明)
 // 各文字は 7 行ぶんの 5 ビット値 (bit4 = 左端)
 const GLYPHS = {
   ' ': [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
@@ -286,11 +301,13 @@ const GLYPHS = {
   ']': [0x0e, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0e],
   '^': [0x04, 0x0a, 0x11, 0x00, 0x00, 0x00, 0x00],
   _: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
+  '`': [0x00, 0x04, 0x0e, 0x0e, 0x1f, 0x1f, 0x00], // ▲ (style-guide.md §6)
+  'a': [0x00, 0x1f, 0x1f, 0x0e, 0x0e, 0x04, 0x00], // ▼
 };
-const FONT = { first: 0x20, count: 64, cols: 16, cellW: 6, cellH: 8, glyphW: 5, glyphH: 7 };
+const FONT = { first: 0x20, count: 66, rows: 5, cols: 16, cellW: 6, cellH: 8, glyphW: 5, glyphH: 7 };
 const WHITE = hex('#ffffff');
 
-const font = makeImage(FONT.cols * FONT.cellW, (FONT.count / FONT.cols) * FONT.cellH);
+const font = makeImage(FONT.cols * FONT.cellW, FONT.rows * FONT.cellH);
 for (let i = 0; i < FONT.count; i++) {
   const ch = String.fromCharCode(FONT.first + i);
   const rows = GLYPHS[ch];
@@ -323,13 +340,23 @@ const rotateNearest = (src, deg) => {
 };
 {
   const variants = [0, 15, 30, 45, 90].map((d) => rotateNearest(car, d));
-  const ghost = makeImage(24, 24);
-  for (let y = 0; y < 24; y++) for (let x = 0; x < 24; x++) if ((x + y) % 2 === 0) setPx(ghost, x, y, getPx(car, x, y));
-  variants.push(ghost);
+  variants.push(...[0, 15, 30, 45, 90].map((d) => rotateNearest(carGhost, d)));
   const sheet = makeImage(24 * variants.length, 24);
   for (let tx = 0; tx < variants.length; tx++) blit(sheet, asphalt, tx * 24, 0);
   variants.forEach((v, i) => blit(sheet, v, i * 24, 0));
   await savePreview(sheet, `${PREVIEW_DIR}/car-base.png`, 8);
+}
+// 通常の車とゴーストを並べて、アスファルト・芝生 (明暗の縞の両方)・砂利の上に置く
+{
+  const surfaces = [asphalt, grass, gravel];
+  const sheet = makeImage(64, 32 * surfaces.length);
+  surfaces.forEach((tile, row) => {
+    blit(sheet, tile, 0, row * 32);
+    blit(sheet, tile, 32, row * 32);
+    blit(sheet, car, 4, row * 32 + 4);
+    blit(sheet, carGhost, 36, row * 32 + 4);
+  });
+  await savePreview(sheet, `${PREVIEW_DIR}/car-base-ghost.png`, 8);
 }
 // フォント: 文字表 (8 倍) と、HUD 風の見本 (2 倍 = 標準の表示サイズ)
 {
@@ -342,11 +369,11 @@ const rotateNearest = (src, deg) => {
     `${PREVIEW_DIR}/ui-font-5x7.png`,
     8,
   );
-  const lines = ['LAP 12/20  1:23.456', 'BEST 1:22.901 +1.234', '287 KM/H  TYRE 72%', 'PIX LIGHTS OUT', 'BOX BOX  DRS ENABLED'];
+  const lines = ['LAP 12/20  1:23.456', 'BEST 1:22.901 +1.234', '287 KM/H  TYRE 72%', 'PIX LIGHTS OUT', 'BOX BOX  DRS ENABLED', '▲ -0.842  ▼ +1.203'];
   const sample = makeImage(4 + 6 * 22, 4 + 10 * lines.length, hex('#11111b'));
   lines.forEach((line, row) => {
     [...line].forEach((ch, col) => {
-      const i = ch.charCodeAt(0) - FONT.first;
+      const i = ({ '▲': 0x60, '▼': 0x61 }[ch] ?? ch.charCodeAt(0)) - FONT.first;
       for (let y = 0; y < FONT.glyphH; y++) {
         for (let x = 0; x < FONT.glyphW; x++) {
           const c = getPx(font, (i % FONT.cols) * FONT.cellW + x, Math.floor(i / FONT.cols) * FONT.cellH + y);
