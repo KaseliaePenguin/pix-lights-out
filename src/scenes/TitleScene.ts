@@ -23,13 +23,13 @@ export class TitleScene implements Scene {
   constructor(private readonly game: Game) {}
 
   enter(): void {
-    // TODO(audio): menu-theme を流す
+    this.game.audio.playBgm('menu-theme');
   }
 
   update(dt: number): void {
     this.time += dt;
     if (wasMenuConfirmPressed(this.game.input)) {
-      // TODO(audio): ui-confirm
+      this.game.audio.playSe('ui-confirm');
       this.game.changeScene(new MenuScene(this.game));
     }
   }

@@ -31,7 +31,7 @@ export class HelpScene implements Scene {
   update(): void {
     const { input } = this.game;
     if (wasMenuBackPressed(input) || wasMenuConfirmPressed(input)) {
-      // TODO(audio): ui-cancel
+      this.game.audio.playSe('ui-cancel');
       this.onBack();
     }
   }

@@ -1,8 +1,16 @@
+import type { AudioManager } from '../core/AudioManager';
+import { SaveData } from '../core/SaveData';
+import { physicsVersion } from '../shared/carParams';
+import { course1 } from '../shared/tracks/course1';
+
 /**
- * 設定値の読み書き (仮)。
- * TODO(save): game-engineer のセーブデータ機能ができたら、loadSettings / saveSettings の中身をそちらに差し替える。
- * 呼び出し側 (SettingsScene など) はこの 2 関数と Settings 型だけを使う。
+ * 設定値と自己ベストの読み書き (セーブデータ SaveData の、ゲーム側の窓口)。
+ * 呼び出し側 (SettingsScene など) は loadSettings / saveSettings と Settings 型を使う。
+ * 走行画面は saveData から自己ベスト・ゴーストを直接読み書きする。
  */
+
+/** ゲーム全体で 1 つのセーブデータ */
+export const saveData = new SaveData('pix-lights-out');
 
 export type NameTagMode = 'all' | 'self' | 'off';
 
@@ -26,51 +34,41 @@ export const defaultSettings: Readonly<Settings> = {
   nameTags: 'all',
 };
 
-const storageKey = 'pix-lights-out.settings';
-
-/** 起動中の設定。localStorage に保存できない環境でも、起動している間は変更を保つ */
+/** 起動中の設定 (検証済み)。保存できない環境でも SaveData がメモリ上の値を保つ */
 let cache: Settings | null = null;
 
 /** 呼び出し側が書き換えてもよいよう、毎回コピーを返す */
 export function loadSettings(): Settings {
-  cache ??= readStoredSettings();
+  cache ??= toSettings(saveData.loadSettings());
   return { ...cache };
 }
 
 export function saveSettings(settings: Settings): void {
   cache = { ...settings };
-  try {
-    window.localStorage.setItem(storageKey, JSON.stringify(cache));
-  } catch {
-    // 保存できなくてもゲームは続ける (キャッシュにより起動中は有効)
-  }
+  saveData.saveSettings(cache);
 }
 
-function readStoredSettings(): Settings {
+/** 設定の BGM・効果音の音量を音の出力に反映する */
+export function applyVolumeSettings(audio: AudioManager, settings: Settings): void {
+  audio.setBgmVolume(settings.bgmVolume / volumeSteps);
+  audio.setSeVolume(settings.seVolume / volumeSteps);
+}
+
+/** 保存されていた値のうち正しいものだけを使い、残りは既定値にする */
+function toSettings(d: Record<string, unknown> | null): Settings {
   const settings: Settings = { ...defaultSettings };
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (raw === null) return settings;
-    const data: unknown = JSON.parse(raw);
-    if (typeof data !== 'object' || data === null) return settings;
-    const d = data as Record<string, unknown>;
-    if (isVolume(d.bgmVolume)) settings.bgmVolume = d.bgmVolume;
-    if (isVolume(d.seVolume)) settings.seVolume = d.seVolume;
-    if (typeof d.screenShake === 'boolean') settings.screenShake = d.screenShake;
-    if (typeof d.showGhost === 'boolean') settings.showGhost = d.showGhost;
-    if (d.nameTags === 'all' || d.nameTags === 'self' || d.nameTags === 'off') settings.nameTags = d.nameTags;
-  } catch {
-    // 使えない環境 (プライベートモードなど) や壊れたデータは既定値で続ける
-  }
+  if (d === null) return settings;
+  if (isVolume(d.bgmVolume)) settings.bgmVolume = d.bgmVolume;
+  if (isVolume(d.seVolume)) settings.seVolume = d.seVolume;
+  if (typeof d.screenShake === 'boolean') settings.screenShake = d.screenShake;
+  if (typeof d.showGhost === 'boolean') settings.showGhost = d.showGhost;
+  if (d.nameTags === 'all' || d.nameTags === 'self' || d.nameTags === 'off') settings.nameTags = d.nameTags;
   return settings;
 }
 
-/**
- * タイムアタックの自己ベスト (メニューに表示)。
- * TODO(save): ゴースト・自己ベストの保存は game-engineer の担当。できたらそちらから読む。
- */
+/** タイムアタックの自己ベスト (メニューに表示)。M1 はコース 1 だけ */
 export function loadTimeAttackBest(): number | null {
-  return null;
+  return saveData.loadBest(course1.id, physicsVersion)?.bestLap ?? null;
 }
 
 function isVolume(value: unknown): value is number {

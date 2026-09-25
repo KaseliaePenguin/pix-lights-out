@@ -27,7 +27,7 @@ const advanceDots = 6;
 
 /**
  * 5×7 ドットの等幅ビットマップフォント (ASCII 0x20-0x5F と ▲ ▼)。小文字は大文字にし、字形のない文字は '?'。
- * 画像が読めない間 (読み込み中・未配置) は等幅のシステムフォントで同じ送り幅に描く。
+ * 画像がない (読み込み前・読めなかった) ときは等幅のシステムフォントで同じ送り幅に描く。
  * ▲ ▼ は画像が 4 行 (96×32) のままでも、同じ字形をコードで塗って描く。
  */
 export class BitmapFont {
@@ -37,20 +37,15 @@ export class BitmapFont {
   /** 色ごとに塗り替えた字形画像。塗り替えられなかった色は null (システムフォントで代用) */
   private readonly tinted = new Map<string, HTMLCanvasElement | null>();
 
-  constructor(src: string) {
-    const image = new Image();
-    image.onload = () => {
-      if (image.width >= sheetCols * cellW && image.height >= (baseGlyphCount / sheetCols) * cellH) {
-        this.sheet = image;
-        this.sheetGlyphCount = Math.floor(image.height / cellH) * sheetCols;
-      } else {
-        console.warn(`フォント画像の大きさが想定と違うため、代用フォントで描きます: ${src} (${image.width}x${image.height})`);
-      }
-    };
-    image.onerror = () => {
-      console.warn(`フォント画像を読み込めないため、代用フォントで描きます: ${src}`);
-    };
-    image.src = src;
+  /** image はアセットローダーで読み込み済みの画像。null (読めなかった) なら代用フォントで描く */
+  constructor(image: HTMLImageElement | null) {
+    if (image === null) return;
+    if (image.width >= sheetCols * cellW && image.height >= (baseGlyphCount / sheetCols) * cellH) {
+      this.sheet = image;
+      this.sheetGlyphCount = Math.floor(image.height / cellH) * sheetCols;
+    } else {
+      console.warn(`フォント画像の大きさが想定と違うため、代用フォントで描きます: ${image.src} (${image.width}x${image.height})`);
+    }
   }
 
   hasImage(): boolean {

@@ -63,7 +63,8 @@ export class PauseScene implements Scene {
     this.items = actions.onRetire
       ? ['resume', 'restart', 'settings', 'retire', 'quit']
       : ['resume', 'restart', 'settings', 'quit'];
-    // TODO(audio): ui-pause (開いたとき)。BGM・エンジン音の一時停止は走行シーン側で行う
+    // BGM・エンジン音の一時停止 (game.audio.pause / resume) は走行シーン側で行う
+    game.audio.playSe('ui-pause');
   }
 
   update(dt: number): void {
@@ -74,12 +75,12 @@ export class PauseScene implements Scene {
     const { input } = this.game;
     if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, this.items.length);
-      // TODO(audio): ui-cursor
+      this.game.audio.playSe('ui-cursor');
     } else if (wasMenuDownPressed(input)) {
       this.selected = moveMenuCursor(this.selected, 1, this.items.length);
-      // TODO(audio): ui-cursor
+      this.game.audio.playSe('ui-cursor');
     } else if (wasMenuBackPressed(input)) {
-      // TODO(audio): ui-pause (閉じたとき)
+      this.game.audio.playSe('ui-pause');
       this.actions.onResume();
     } else if (wasMenuConfirmPressed(input)) {
       this.confirm();
@@ -104,26 +105,26 @@ export class PauseScene implements Scene {
   private confirm(): void {
     switch (this.items[this.selected]) {
       case 'resume':
-        // TODO(audio): ui-pause (閉じたとき)
+        this.game.audio.playSe('ui-pause');
         this.actions.onResume();
         break;
       case 'restart':
-        // TODO(audio): ui-confirm
+        this.game.audio.playSe('ui-confirm');
         this.actions.onRestart();
         break;
       case 'settings':
-        // TODO(audio): ui-confirm
+        this.game.audio.playSe('ui-confirm');
         this.child = new SettingsScene(this.game, () => {
           this.child = null;
           this.actions.onSettingsClosed?.();
         });
         break;
       case 'retire':
-        // TODO(audio): ui-confirm
+        this.game.audio.playSe('ui-confirm');
         this.actions.onRetire?.();
         break;
       case 'quit':
-        // TODO(audio): ui-confirm
+        this.game.audio.playSe('ui-confirm');
         this.actions.onQuitToMenu();
         break;
     }

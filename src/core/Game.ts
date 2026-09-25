@@ -1,3 +1,5 @@
+import { Assets } from './Assets';
+import { AudioManager } from './AudioManager';
 import { Input } from './Input';
 import type { Scene } from './Scene';
 
@@ -5,6 +7,8 @@ import type { Scene } from './Scene';
 export class Game {
   readonly ctx: CanvasRenderingContext2D;
   readonly input: Input;
+  readonly assets = new Assets();
+  readonly audio: AudioManager;
   readonly width: number;
   readonly height: number;
 
@@ -20,6 +24,9 @@ export class Game {
     this.width = canvas.width;
     this.height = canvas.height;
     this.input = new Input(window);
+    this.audio = new AudioManager(this.assets);
+    // 最初のキー入力で AudioContext を resume し、タブが隠れている間は止める
+    this.audio.attach(window);
   }
 
   changeScene(next: Scene): void {

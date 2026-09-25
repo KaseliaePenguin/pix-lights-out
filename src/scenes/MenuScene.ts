@@ -51,7 +51,8 @@ export class MenuScene implements Scene {
   }
 
   enter(): void {
-    // TODO(audio): menu-theme を流す (タイトルから続けて流れている場合は頭出ししない)
+    // タイトルから続けて流れている場合は頭出ししない
+    this.game.audio.playBgm('menu-theme');
   }
 
   update(): void {
@@ -59,14 +60,14 @@ export class MenuScene implements Scene {
     // 選べない項目にもカーソルを止める (何があるかを見せるため)。isSelectable は渡さない
     if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, entries.length);
-      // TODO(audio): ui-cursor
+      this.game.audio.playSe('ui-cursor');
     } else if (wasMenuDownPressed(input)) {
       this.selected = moveMenuCursor(this.selected, 1, entries.length);
-      // TODO(audio): ui-cursor
+      this.game.audio.playSe('ui-cursor');
     } else if (wasMenuConfirmPressed(input)) {
       this.confirm();
     } else if (wasMenuBackPressed(input)) {
-      // TODO(audio): ui-cancel
+      this.game.audio.playSe('ui-cancel');
       this.game.changeScene(new TitleScene(this.game));
     }
   }
@@ -98,14 +99,16 @@ export class MenuScene implements Scene {
   private confirm(): void {
     const entry = entries[this.selected];
     if (!entry.isEnabled) {
-      // TODO(audio): ui-error
+      this.game.audio.playSe('ui-error');
       return;
     }
-    // TODO(audio): ui-confirm
+    this.game.audio.playSe('ui-confirm');
     const game = this.game;
     switch (entry.item) {
       case 'timeAttack':
         // TODO(scene): 基盤ができたら RaceScene (session: 'timeAttack') に差し替える
+        // メニューの曲を止める (走行画面の BGM は走行画面が流す)
+        game.audio.stopBgm();
         game.changeScene(new PlayScene(game));
         break;
       case 'settings':

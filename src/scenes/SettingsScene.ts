@@ -13,7 +13,7 @@ import {
   wasMenuRightPressed,
   wasMenuUpPressed,
 } from './menuKeys';
-import { loadSettings, saveSettings, volumeSteps } from './settingsStorage';
+import { applyVolumeSettings, loadSettings, saveSettings, volumeSteps } from './settingsStorage';
 import type { NameTagMode, Settings } from './settingsStorage';
 
 type SettingsItem = 'bgmVolume' | 'seVolume' | 'screenShake' | 'showGhost' | 'nameTags' | 'controls' | 'back';
@@ -45,10 +45,10 @@ export class SettingsScene implements Scene {
     const { input } = this.game;
     if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, items.length);
-      // TODO(audio): ui-cursor
+      this.game.audio.playSe('ui-cursor');
     } else if (wasMenuDownPressed(input)) {
       this.selected = moveMenuCursor(this.selected, 1, items.length);
-      // TODO(audio): ui-cursor
+      this.game.audio.playSe('ui-cursor');
     } else if (wasMenuLeftPressed(input)) {
       this.changeValue(-1);
     } else if (wasMenuRightPressed(input)) {
@@ -56,7 +56,7 @@ export class SettingsScene implements Scene {
     } else if (wasMenuConfirmPressed(input)) {
       this.confirm();
     } else if (wasMenuBackPressed(input)) {
-      // TODO(audio): ui-cancel
+      this.game.audio.playSe('ui-cancel');
       this.onBack();
     }
   }
@@ -79,11 +79,9 @@ export class SettingsScene implements Scene {
     switch (items[this.selected]) {
       case 'bgmVolume':
         s.bgmVolume = clamp(s.bgmVolume + step, 0, volumeSteps);
-        // TODO(audio): BGM の音量を s.bgmVolume / volumeSteps に反映する
         break;
       case 'seVolume':
         s.seVolume = clamp(s.seVolume + step, 0, volumeSteps);
-        // TODO(audio): 効果音の音量を反映し、確認用に ui-cursor を新しい音量で鳴らす
         break;
       case 'screenShake':
         s.screenShake = !s.screenShake;
@@ -99,7 +97,9 @@ export class SettingsScene implements Scene {
       default:
         return;
     }
-    // TODO(audio): ui-cursor
+    // 音量の変更は、続く ui-cursor が新しい音量で鳴ることで確認できる
+    applyVolumeSettings(this.game.audio, s);
+    this.game.audio.playSe('ui-cursor');
     saveSettings(s);
   }
 
@@ -111,13 +111,13 @@ export class SettingsScene implements Scene {
         this.changeValue(1);
         break;
       case 'controls':
-        // TODO(audio): ui-confirm
+        this.game.audio.playSe('ui-confirm');
         this.child = new HelpScene(this.game, () => {
           this.child = null;
         });
         break;
       case 'back':
-        // TODO(audio): ui-cancel
+        this.game.audio.playSe('ui-cancel');
         this.onBack();
         break;
       default:

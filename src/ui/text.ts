@@ -1,14 +1,18 @@
 import { BitmapFont } from './BitmapFont';
 import type { TextOptions } from './BitmapFont';
 
-// TODO(assets): game-engineer のアセットローダーができたら、読み込み済みの画像を使う形に差し替える
-const fontPath = '/assets/ui/ui-font-5x7.png';
+let uiFont = new BitmapFont(null);
 
-let uiFont: BitmapFont | null = null;
+/**
+ * フォント画像を設定する。起動時の読み込みが終わったら、アセットローダーの ui-font-5x7 を渡す
+ * (それまでと、読めなかった場合は等幅のシステムフォントで描く)
+ */
+export function setUiFontImage(image: HTMLImageElement | null): void {
+  uiFont = new BitmapFont(image);
+}
 
-/** HUD・メニュー共通のフォント (初回呼び出し時に読み込みを始める) */
+/** HUD・メニュー共通のフォント */
 export function getUiFont(): BitmapFont {
-  uiFont ??= new BitmapFont(fontPath);
   return uiFont;
 }
 
