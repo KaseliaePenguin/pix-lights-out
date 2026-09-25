@@ -45,8 +45,6 @@ export const hudMessages = {
     color: colors.white,
     priority: 4,
   }),
-  /** 予選・タイムアタックの発進前 `3` `2` `1` */
-  countdown: (count: number): HudMessage => ({ text: String(count), color: colors.white, priority: 4 }),
   /** 自分のゴール (最優先) */
   finish: (position: number): HudMessage => ({ text: `P${position} FINISH`, color: colors.white, priority: 0 }),
 };

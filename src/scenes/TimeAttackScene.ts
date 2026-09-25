@@ -12,7 +12,7 @@ import { TrackRenderer } from '../render/TrackRenderer';
 import type { WheelIndex } from '../shared/Car';
 import { computeCarSound, createCarSoundParams, wallImpactEffect } from '../shared/carEffects';
 import type { ImpactEffect } from '../shared/carEffects';
-import { physicsVersion, raceRules, recordVersionOf } from '../shared/carParams';
+import { raceRules, recordVersionOf } from '../shared/carParams';
 import { createControls } from '../shared/controls';
 import { deserializeGhost, serializeGhost } from '../shared/ghost';
 import type { GhostData } from '../shared/ghost';
@@ -24,6 +24,7 @@ import { course1 } from '../shared/tracks/course1';
 import { toKmh } from '../shared/VirtualGearbox';
 import { drawCarStatusPanel } from '../ui/carStatusPanel';
 import { drawCheckpointArrow } from '../ui/checkpointArrow';
+import { drawCountdown } from '../ui/countdown';
 import { colors } from '../ui/colors';
 import { drawDebugPanel } from '../ui/debugPanel';
 import type { DebugRow } from '../ui/debugPanel';
@@ -64,7 +65,8 @@ export class TimeAttackScene implements Scene {
   private session: TimeAttackSession | null = null;
   private renderer: TrackRenderer | null = null;
   private marks: TireMarks | null = null;
-  private hasShownLoading = false;
+  /** 読み込み中に経過した更新の回数 (LOADING を描いてからコースを作るため) */
+  private loadingUpdates = 0;
 
   private readonly layer = new WorldLayer();
   private readonly camera = new Camera();
@@ -98,12 +100,15 @@ export class TimeAttackScene implements Scene {
 
   exit(): void {
     this.stopDriveSounds();
-    if (this.game.audio.isPaused) this.game.audio.resume();
+    // メニューへ戻るときに走行の BGM を鳴らし直さない (次の画面が自分の曲を流す)
+    if (this.game.audio.isPaused) this.game.audio.resume({ resumeBgm: false });
   }
 
   update(dt: number): void {
     if (!this.session) {
-      if (this.hasShownLoading) this.build();
+      // 1 回目の更新のあとに LOADING が描かれ、2 回目で作る (作る間は画面が止まる)
+      this.loadingUpdates++;
+      if (this.loadingUpdates >= 2) this.build();
       return;
     }
     const { input } = this.game;
@@ -136,7 +141,6 @@ export class TimeAttackScene implements Scene {
       ctx.fillStyle = colors.base;
       ctx.fillRect(0, 0, width, height);
       drawText(ctx, 'LOADING COURSE', width / 2, height / 2 - 8, { color: colors.text, align: 'center' });
-      this.hasShownLoading = true;
       return;
     }
     const session = this.session;
@@ -181,7 +185,6 @@ export class TimeAttackScene implements Scene {
     this.marks = new TireMarks(track);
     this.session = new TimeAttackSession(track, loadRecord(track));
     this.savedGhost = this.session.record.ghost;
-    this.startRun();
     const audio = this.game.audio;
     this.sounds = {
       engine: audio.createEngine('engine-player-loop', 'engine-player-decel-loop'),
@@ -191,6 +194,7 @@ export class TimeAttackScene implements Scene {
       kerb: audio.createLoop('kerb-rumble-loop'),
       scrape: audio.createLoop('scrape-loop'),
     };
+    this.startRun();
   }
 
   /** 開始位置からカウントダウンをやり直す (最初とリスタート) */
@@ -203,6 +207,8 @@ export class TimeAttackScene implements Scene {
     this.messages.clear();
     this.camera.snapTo(session.car.x, session.car.y);
     this.time = 0;
+    // コースの生成などで止まっていた時間をまとめて進めない (カウントダウンが短くならないように)
+    this.game.resetClock();
   }
 
   // ---- イベント・状態 ----
@@ -212,12 +218,6 @@ export class TimeAttackScene implements Scene {
     const session = this.session;
     if (!session) return;
     switch (e.type) {
-      case 'countdown':
-        this.messages.setStatus('countdown', hudMessages.countdown(e.value));
-        break;
-      case 'go':
-        this.messages.setStatus('countdown', null);
-        break;
       case 'sectorResult':
         if (e.result === 'overall' || e.result === 'personal') audio.playSe('sector-best');
         else if (e.result === 'slower') audio.playSe('sector-time');
@@ -233,7 +233,8 @@ export class TimeAttackScene implements Scene {
         this.saveRecord(e.record);
         break;
       case 'lapInvalidated':
-        this.messages.push(hudMessages.invalidLap());
+        // コース復帰による無効化では出さない (RESET のカウントを隠さないため。game-design.md 10.2 節)
+        if (e.reason !== 'reset') this.messages.push(hudMessages.invalidLap());
         break;
       case 'wrongWayStarted':
         audio.playSe('ui-error');
@@ -276,9 +277,9 @@ export class TimeAttackScene implements Scene {
   }
 
   private saveRecord(record: TimeAttackRecord): void {
-    saveData.saveBest(record.trackId, physicsVersion, { bestLap: record.bestLap, bestSectors: record.bestSectors });
+    saveData.saveBest(record.trackId, record.recordVersion, { bestLap: record.bestLap, bestSectors: record.bestSectors });
     if (record.ghost && record.ghost !== this.savedGhost) {
-      saveData.saveGhost(record.trackId, physicsVersion, serializeGhost(record.ghost));
+      saveData.saveGhost(record.trackId, record.recordVersion, serializeGhost(record.ghost));
       this.savedGhost = record.ghost;
     }
   }
@@ -301,12 +302,12 @@ export class TimeAttackScene implements Scene {
       }
     }
 
+    if (car.lockupStarted) this.game.audio.playSe('tire-lockup');
+
     // 壁との衝突: 音・画面揺れ・火花
     if (car.wallImpact > 0) {
       const effect = wallImpactEffect(car.wallImpact, this.impact);
-      if (effect.sound === 'crash-wall') this.game.audio.playSe('crash-wall', effect.volume);
-      // TODO(audio): tire-barrier-hit は未作成で音の設定 (assetList.ts) もない。できるまで crash-wall を小さく鳴らす
-      else if (effect.sound === 'tire-barrier-hit') this.game.audio.playSe('crash-wall', effect.volume * 0.5);
+      if (effect.sound) this.game.audio.playSe(effect.sound, effect.volume);
       if (effect.shake > 0) this.camera.shake(effect.shake);
       if (effect.sparks > 0) this.particles.emitSparks(car.wallImpactX, car.wallImpactY, effect.sparks, car.vx, car.vy);
     }
@@ -355,7 +356,6 @@ export class TimeAttackScene implements Scene {
 
   // ---- 音 ----
 
-  // TODO(audio): tire-lockup (car.lockupStarted) は未作成で音の設定もない。できたら updateEffects で鳴らす
   private updateSounds(): void {
     const session = this.session;
     const s = this.sounds;
@@ -439,6 +439,7 @@ export class TimeAttackScene implements Scene {
       const angle = Math.atan2((gate.ay + gate.by) / 2 - car.y, (gate.ax + gate.bx) / 2 - car.x);
       drawCheckpointArrow(ctx, angle);
     }
+    if (session.phase === 'countdown') drawCountdown(ctx, Math.ceil(session.countdownRemaining - 1e-9));
     if (this.isDebugVisible) drawDebugPanel(ctx, this.debugRows());
   }
 
@@ -464,8 +465,9 @@ export class TimeAttackScene implements Scene {
 /** 保存されている自己ベストとゴーストを、セッションに渡す形にする。どちらもなければ null */
 function loadRecord(track: Track): TimeAttackRecord | null {
   const trackId = track.id;
-  const best = saveData.loadBest(trackId, physicsVersion);
-  const ghost = deserializeGhost(saveData.loadGhost(trackId, physicsVersion), trackId, track.version);
+  const version = recordVersionOf(track);
+  const best = saveData.loadBest(trackId, version);
+  const ghost = deserializeGhost(saveData.loadGhost(trackId, version), trackId, track.version);
   if (!best && !ghost) return null;
   return {
     recordVersion: recordVersionOf(track),

@@ -1,6 +1,6 @@
 import type { AudioManager } from '../core/AudioManager';
 import { SaveData } from '../core/SaveData';
-import { physicsVersion } from '../shared/carParams';
+import { recordVersionOf } from '../shared/carParams';
 import { course1 } from '../shared/tracks/course1';
 
 /**
@@ -66,9 +66,13 @@ function toSettings(d: Record<string, unknown> | null): Settings {
   return settings;
 }
 
-/** タイムアタックの自己ベスト (メニューに表示)。M1 はコース 1 だけ */
+/**
+ * タイムアタックの自己ベスト (メニューに表示)。M1 はコース 1 だけ。
+ * 保存キーのバージョンは走行画面と同じ recordVersionOf で作る (違うと、読んだ側が記録を破棄してしまう)。
+ * Track の生成は重いので、コースデータ (version を持つ) をそのまま渡す
+ */
 export function loadTimeAttackBest(): number | null {
-  return saveData.loadBest(course1.id, physicsVersion)?.bestLap ?? null;
+  return saveData.loadBest(course1.id, recordVersionOf(course1))?.bestLap ?? null;
 }
 
 function isVolume(value: unknown): value is number {
