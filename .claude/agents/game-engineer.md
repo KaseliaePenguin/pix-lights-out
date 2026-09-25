@@ -12,6 +12,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 - 当たり判定、カメラ・座標変換、アセットローダー、オーディオ、スプライトアニメーション、タイマー、乱数、セーブデータなど
 - エンティティの共通基盤 (基底クラスや共通インターフェース)
 - パフォーマンスの計測と改善
+- サウンド再生 (Web Audio API): BGM のループ再生、SE の同時再生、エンジン音のピッチ変化 (`playbackRate`)、音量設定。音源は `public/assets/sounds/` の OGG (sound-designer が作成)
 
 ## 設計方針
 

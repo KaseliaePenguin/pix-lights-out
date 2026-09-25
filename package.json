@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "gen:image": "node scripts/generate-image.mjs",
-    "gen:sprite": "node scripts/process-sprite.mjs"
+    "gen:sprite": "node scripts/process-sprite.mjs",
+    "gen:sound": "node scripts/generate-sound.mjs",
+    "gen:sound-convert": "node scripts/process-sound.mjs"
   },
   "devDependencies": {
     "sharp": "^0.35.4",

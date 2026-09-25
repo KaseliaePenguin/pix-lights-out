@@ -4,9 +4,8 @@
 //
 // 出力: assets-src/generated/<name>-<seed>.png (1024px 前後の元画像。ゲームには process-sprite.mjs で変換して使う)
 
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { randomSeed, runWorkflow } from './lib/comfyui.mjs';
 
 const { values: args } = parseArgs({
   options: {
@@ -29,7 +28,6 @@ if (!args.name || !args.prompt) {
   process.exit(1);
 }
 
-const COMFYUI_URL = process.env.COMFYUI_URL ?? 'http://127.0.0.1:8188';
 const CHECKPOINT = process.env.COMFYUI_CHECKPOINT ?? 'sd_xl_base_1.0.safetensors';
 const LORA = process.env.COMFYUI_LORA ?? 'pixel-art-xl.safetensors';
 
@@ -37,7 +35,7 @@ const LORA = process.env.COMFYUI_LORA ?? 'pixel-art-xl.safetensors';
 const STYLE_PROMPT = 'pixel art, game sprite, clean outline, flat colors, limited palette, centered, full body, plain white background';
 const STYLE_NEGATIVE = 'blurry, gradient, noise, jpeg artifacts, photo, realistic, 3d render, text, watermark, signature, multiple characters, cropped, shadow on background';
 
-const seed = args.seed !== undefined ? Number(args.seed) : Math.floor(Math.random() * 2 ** 32);
+const seed = args.seed !== undefined ? Number(args.seed) : randomSeed();
 
 const workflow = {
   checkpoint: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: CHECKPOINT } },
@@ -79,43 +77,12 @@ const workflow = {
   save: { class_type: 'SaveImage', inputs: { filename_prefix: `test-game/${args.name}`, images: ['decode', 0] } },
 };
 
-async function comfy(path, init) {
-  const res = await fetch(`${COMFYUI_URL}${path}`, init).catch((e) => {
-    throw new Error(`ComfyUI (${COMFYUI_URL}) に接続できません。起動しているか確認してください: ${e.message}`);
-  });
-  if (!res.ok) throw new Error(`ComfyUI ${path} -> ${res.status}: ${await res.text()}`);
-  return res;
-}
-
-const queued = await (
-  await comfy('/prompt', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: workflow }),
-  })
-).json();
-const promptId = queued.prompt_id;
-console.error(`queued ${promptId} (seed ${seed})`);
-
-let outputs;
-const deadline = Date.now() + 10 * 60 * 1000;
-while (!outputs) {
-  if (Date.now() > deadline) throw new Error('生成がタイムアウトしました (10 分)');
-  await new Promise((r) => setTimeout(r, 1000));
-  const history = await (await comfy(`/history/${promptId}`)).json();
-  const entry = history[promptId];
-  if (entry?.status?.status_str === 'error') {
-    throw new Error(`生成に失敗しました: ${JSON.stringify(entry.status.messages)}`);
-  }
-  if (entry?.outputs?.save) outputs = entry.outputs.save.images;
-}
-
-await mkdir(args['out-dir'], { recursive: true });
-for (const [i, image] of outputs.entries()) {
-  const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder, type: image.type });
-  const data = Buffer.from(await (await comfy(`/view?${query}`)).arrayBuffer());
-  const suffix = outputs.length > 1 ? `-${i + 1}` : '';
-  const outPath = join(args['out-dir'], `${args.name}-${seed}${suffix}.png`);
-  await writeFile(outPath, data);
-  console.log(outPath);
-}
+console.error(`seed ${seed}`);
+const saved = await runWorkflow({
+  workflow,
+  outputNode: 'save',
+  outputKey: 'images',
+  outDir: args['out-dir'],
+  baseName: `${args.name}-${seed}`,
+});
+for (const path of saved) console.log(path);

@@ -5,7 +5,9 @@
 **トップダウン視点の F1 風レースゲーム**。TypeScript + Canvas 2D で作るブラウザゲームで、外部ゲームエンジンは使わず、ゲームループ・シーン管理・入力処理を `src/core/` に自前で実装している。
 
 - オンライン対戦あり: P2P のホスト・クライアント方式で、ホストの IP アドレスを直接指定して接続する。接続方式の検討は `docs/design/network.md`
-- アートスタイルはピクセルアート
+- アートスタイルはピクセルアート。画像・BGM・SE はすべてローカルの AI で生成する
+
+実装の基本:
 
 - `Game` が固定タイムステップ (1/60 秒) で `update` を呼び、毎フレーム `render` する
 - 画面は `Scene` 単位で管理し、`game.changeScene(new XxxScene(game))` で切り替える
@@ -41,23 +43,26 @@ npm run preview    # ビルド結果の確認
 
 変更後は `npm run build` が通ることを確認する。
 
-### アセット生成 (ピクセルアート)
+### アセット生成 (ローカル AI)
 
-- アートスタイルはピクセルアート。画像はローカルの Stable Diffusion (ComfyUI + SDXL + pixel-art-xl LoRA) で生成する
 - ComfyUI は `C:\Users\yutak\ComfyUI` にあり、`http://127.0.0.1:8188` で動かす。セットアップと使い方は `docs/setup/comfyui.md`
-- `npm run gen:image` で元画像を `assets-src/generated/` に生成し、`npm run gen:sprite` でゲーム用の透過 PNG に変換して `public/assets/` に置く
-- `assets-src/` は中間ファイル置き場 (git 管理外)。スタイルガイドは `docs/art/style-guide.md`、パレットは `docs/art/palette.json`
-- `sharp` は生成スクリプト用の devDependency で、ゲーム本体では使わない
+- 画像 (ピクセルアート): SDXL + pixel-art-xl LoRA。`npm run gen:image` で元画像を生成し、`npm run gen:sprite` で透過 PNG に変換して `public/assets/images/` に置く
+- BGM: ACE-Step、SE: Stable Audio Open。`npm run gen:sound` で元音声を生成し、`npm run gen:sound-convert` で OGG に変換 (ループ化・音量調整) して `public/assets/sounds/bgm/`・`se/` に置く
+- ComfyUI の呼び出しは `scripts/lib/comfyui.mjs` に共通化している
+- `assets-src/` は中間ファイル置き場 (git 管理外)。スタイルガイドは `docs/art/`、サウンドの方針と一覧は `docs/sound/`
+- `sharp` (画像変換) と ffmpeg (音声変換、winget で導入) は生成スクリプト専用で、ゲーム本体では使わない
+- Claude は音を聴けないため、サウンドの最終確認は必ずユーザーの試聴で行う
 
 ## サブエージェント
 
-`.claude/agents/` に定義。企画 → 見た目の方針 → 画像 → 実装 → 確認の順につながる。
+`.claude/agents/` に定義。企画 → 見た目・音の方針 → 素材 → 実装 → 確認の順につながる。
 
 | エージェント | 担当 |
 | --- | --- |
 | game-designer | 仕様書 (`docs/design/`) |
 | art-director | スタイルガイド・パレット・見た目のレビュー (`docs/art/`) |
-| 2d-illustrator | ピクセルアートの生成と配置 (`public/assets/`) |
+| 2d-illustrator | ピクセルアートの生成と配置 (`public/assets/images/`) |
+| sound-designer | BGM・SE の方針、生成、加工、配置 (`docs/sound/`, `public/assets/sounds/`) |
 | game-engineer | エンジン層・基盤機能 (`src/core/`) |
 | scene-builder | シーンの実装 (`src/scenes/`) |
 | build-checker | ビルド確認とエラー修正 |
