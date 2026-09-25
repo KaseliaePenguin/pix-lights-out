@@ -12,7 +12,22 @@ const images: Record<string, string> = {
   'tile-asphalt': '/assets/images/tile-asphalt.png',
   'tile-grass': '/assets/images/tile-grass.png',
   'tile-gravel': '/assets/images/tile-gravel.png',
+  'tile-pit': '/assets/images/tile-pit.png',
   'ui-font-5x7': '/assets/ui/ui-font-5x7.png',
+  'ui-lamp-on': '/assets/ui/ui-lamp-on.png',
+  'ui-lamp-off': '/assets/ui/ui-lamp-off.png',
+  'title-bg': '/assets/images/title-bg.png',
+  'title-logo': '/assets/images/title-logo.png',
+};
+// チームの車 (車番 1〜8): car-team-01 〜 car-team-08
+for (let team = 1; team <= 8; team++) {
+  const name = `car-team-${String(team).padStart(2, '0')}`;
+  images[name] = `/assets/images/${name}.png`;
+}
+
+/** JSON のデータ */
+const data: Record<string, string> = {
+  'title-paths': '/assets/data/title-paths.json',
 };
 
 const bgmFiles = ['menu-theme', 'qualifying-theme', 'race-theme'];
@@ -28,6 +43,10 @@ const seFiles = [
   'crash-wall-1',
   'crash-wall-2',
   'crash-wall-3',
+  'tire-barrier-hit-1',
+  'tire-barrier-hit-2',
+  'tire-lockup-1',
+  'tire-lockup-2',
   'drs-open',
   'drs-close',
   'lap-complete',
@@ -39,14 +58,14 @@ const seFiles = [
   'ui-pause',
   'ui-error',
 ];
-/** sound-list.md で未作成のもの。置かれたら自動で使われる */
-const plannedFiles = ['ui-error'];
+/** sound-list.md で未作成のもの (読めなくても警告しない)。置かれたら自動で使われる */
+const plannedFiles: string[] = [];
 
 const sounds: Record<string, string> = {};
 for (const name of bgmFiles) sounds[name] = `/assets/sounds/bgm/${name}.ogg`;
 for (const name of seFiles) sounds[name] = `/assets/sounds/se/${name}.ogg`;
 
-export const assetManifest: AssetManifest = { images, sounds, optional: plannedFiles };
+export const assetManifest: AssetManifest = { images, sounds, data, optional: plannedFiles };
 
 // sound-guide.md 4 章のグループの推奨ゲイン
 const bgmMenu = 0.7;
@@ -80,10 +99,28 @@ export const soundDefs = {
   'offtrack-grass-loop': { files: ['offtrack-grass-loop'], bus: 'drive', volume: tyre, release: 0.2 },
   'offtrack-gravel-loop': { files: ['offtrack-gravel-loop'], bus: 'drive', volume: tyre, release: 0.2 },
   'kerb-rumble-loop': { files: ['kerb-rumble-loop'], bus: 'drive', volume: tyre, release: 0.2 },
+  // フルブレーキの開始時に 1 回 (ワンショット)
+  'tire-lockup': {
+    files: ['tire-lockup-1', 'tire-lockup-2'],
+    bus: 'drive',
+    volume: tyre,
+    // -2 は平均音量が -1 より約 7 dB 小さい (ピークは同じ) ため 2 倍にする
+    fileVolumes: [1, 2],
+    rateJitter: 0.05,
+    highShelfDb: -3,
+  },
 
   // 接触
   'crash-wall': {
     files: ['crash-wall-1', 'crash-wall-2', 'crash-wall-3'],
+    bus: 'drive',
+    volume: crash,
+    rateJitter: 0.08,
+    maxVoices: 4,
+  },
+  // 弱い衝突 (強さ 187.5 未満)。強さで音量を変えるのは crash-wall と同じ
+  'tire-barrier-hit': {
+    files: ['tire-barrier-hit-1', 'tire-barrier-hit-2'],
     bus: 'drive',
     volume: crash,
     rateJitter: 0.08,
@@ -104,8 +141,7 @@ export const soundDefs = {
   'ui-confirm': { files: ['ui-confirm'], bus: 'ui', volume: ui },
   'ui-cancel': { files: ['ui-cancel'], bus: 'ui', volume: ui },
   'ui-pause': { files: ['ui-pause'], bus: 'ui', volume: ui },
-  // ui-error は未作成。できるまで ui-cancel で代用する
-  'ui-error': { files: ['ui-error'], bus: 'ui', volume: ui, fallback: 'ui-cancel' },
+  'ui-error': { files: ['ui-error'], bus: 'ui', volume: ui },
 } satisfies Record<string, SoundDef>;
 
 export type SoundName = keyof typeof soundDefs;

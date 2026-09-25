@@ -21,6 +21,8 @@ export interface SoundDef {
   bus: SoundBus;
   /** 基準音量 (ゲイン)。素材が小さい場合は 1 を超えてもよい */
   volume: number;
+  /** files ごとに基準音量へ掛ける倍率 (バリエーションの音量の差をそろえる)。省けばすべて 1 */
+  fileVolumes?: readonly number[];
   /** ループの音量を下げるときにほぼ消えるまでの時間 (秒) */
   release?: number;
   /** ワンショットの再生速度に掛けるランダムな幅 (0.08 なら ±8%) */
@@ -177,7 +179,7 @@ export class AudioManager {
     const jitter = def.rateJitter ?? 0;
     source.playbackRate.value = rate * (1 + jitter * (Math.random() * 2 - 1));
     const gain = ctx.createGain();
-    gain.gain.value = def.volume * Math.max(0, volume);
+    gain.gain.value = def.volume * resolved.fileVolume * Math.max(0, volume);
     source.connect(gain);
     let filter: BiquadFilterNode | null = null;
     if (def.highShelfDb) {
@@ -211,7 +213,7 @@ export class AudioManager {
       this.context,
       resolved?.buffer ?? null,
       bus,
-      def?.volume ?? 0,
+      (def?.volume ?? 0) * (resolved?.fileVolume ?? 1),
       { release: def?.release, ...timing },
       def?.highShelfDb ?? 0,
     );
@@ -307,13 +309,13 @@ export class AudioManager {
   }
 
   /** 名前から設定と音声を引く。読めていなければ fallback をたどる。なければ一度だけ警告して null */
-  private resolve(name: string): { name: string; def: SoundDef; buffer: AudioBuffer } | null {
+  private resolve(name: string): { name: string; def: SoundDef; buffer: AudioBuffer; fileVolume: number } | null {
     let current = name;
     for (let depth = 0; depth < 4; depth++) {
       const def = this.defs.get(current);
       if (!def) break;
-      const buffer = this.pickBuffer(def);
-      if (buffer) return { name: current, def, buffer };
+      const picked = this.pickBuffer(def);
+      if (picked) return { name: current, def, buffer: picked.buffer, fileVolume: picked.fileVolume };
       if (!def.fallback) break;
       current = def.fallback;
     }
@@ -325,14 +327,15 @@ export class AudioManager {
     return null;
   }
 
-  private pickBuffer(def: SoundDef): AudioBuffer | null {
+  private pickBuffer(def: SoundDef): { buffer: AudioBuffer; fileVolume: number } | null {
     const files = def.files;
     if (files.length === 0) return null;
     const start = Math.floor(Math.random() * files.length);
     // 選んだものが読めていなければ、読めている別のバリエーションを使う
     for (let i = 0; i < files.length; i++) {
-      const buffer = this.assets.getSound(files[(start + i) % files.length]);
-      if (buffer) return buffer;
+      const index = (start + i) % files.length;
+      const buffer = this.assets.getSound(files[index]);
+      if (buffer) return { buffer, fileVolume: def.fileVolumes?.[index] ?? 1 };
     }
     return null;
   }

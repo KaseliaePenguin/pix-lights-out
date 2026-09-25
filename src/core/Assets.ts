@@ -2,6 +2,8 @@
 export interface AssetManifest {
   images: Readonly<Record<string, string>>;
   sounds: Readonly<Record<string, string>>;
+  /** JSON のデータ (経路など)。getData で解析済みの値を取り出す */
+  data?: Readonly<Record<string, string>>;
   /** まだ作られていない予定のファイル。読めなくても警告を出さない */
   optional?: readonly string[];
 }
@@ -16,6 +18,7 @@ export type LoadProgress = (ratio: number) => void;
 export class Assets {
   private readonly images = new Map<string, HTMLImageElement>();
   private readonly sounds = new Map<string, AudioBuffer>();
+  private readonly data = new Map<string, unknown>();
 
   /**
    * すべて読み終えるか失敗し終えるまで待つ。音声のデコードに AudioContext が要る
@@ -25,7 +28,8 @@ export class Assets {
     const optional = new Set(manifest.optional ?? []);
     const imageEntries = Object.entries(manifest.images);
     const soundEntries = audioContext ? Object.entries(manifest.sounds) : [];
-    const total = imageEntries.length + soundEntries.length;
+    const dataEntries = Object.entries(manifest.data ?? {});
+    const total = imageEntries.length + soundEntries.length + dataEntries.length;
     let done = 0;
     const finishOne = (): void => {
       done++;
@@ -41,6 +45,14 @@ export class Assets {
       tasks.push(
         loadImage(url)
           .then((image) => void this.images.set(name, image))
+          .catch((reason: unknown) => report(name, url, reason))
+          .finally(finishOne),
+      );
+    }
+    for (const [name, url] of dataEntries) {
+      tasks.push(
+        loadJson(url)
+          .then((value) => void this.data.set(name, value))
           .catch((reason: unknown) => report(name, url, reason))
           .finally(finishOne),
       );
@@ -71,6 +83,11 @@ export class Assets {
     return this.sounds.get(name) ?? null;
   }
 
+  /** 読めなかった・一覧にない JSON は null。中身の検証は呼び出し側で行う */
+  getData(name: string): unknown {
+    return this.data.get(name) ?? null;
+  }
+
   hasImage(name: string): boolean {
     return this.images.has(name);
   }
@@ -87,6 +104,12 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     image.onerror = () => reject(new Error('image load error'));
     image.src = url;
   });
+}
+
+async function loadJson(url: string): Promise<unknown> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as unknown;
 }
 
 async function loadAudioBuffer(context: BaseAudioContext, url: string): Promise<AudioBuffer> {

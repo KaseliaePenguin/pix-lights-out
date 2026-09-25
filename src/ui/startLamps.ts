@@ -21,20 +21,35 @@ const lampRows: Array<[number, number]> = (() => {
 /** スタートランプの全体の幅 (px) */
 export const startLampsWidth = unitW * 5 + unitGap * 4;
 
+/** ランプのスプライト (ui-lamp-on / ui-lamp-off、12×12 を 2 倍で描く) */
+export interface LampImages {
+  on: HTMLImageElement;
+  off: HTMLImageElement;
+}
+
 /**
  * スタートランプ (5 ユニット)。litCount は左から点灯しているユニット数 (0〜5)。
  * 既定の位置は HUD の上中央 (x276 y12)。タイトル画面の飾りにも使う。
+ * images を渡すとランプをスプライトで描き、なければコードで円を塗る。
  */
-export function drawStartLamps(ctx: CanvasRenderingContext2D, litCount: number, x = 276, y = 12): void {
+export function drawStartLamps(ctx: CanvasRenderingContext2D, litCount: number, x = 276, y = 12, images: LampImages | null = null): void {
   for (let i = 0; i < 5; i++) {
     const ux = x + i * (unitW + unitGap);
     ctx.fillStyle = colors.surface;
     ctx.fillRect(ux, y, unitW, unitH);
     ctx.fillStyle = colors.ink;
     ctx.fillRect(ux + 2, y + 2, unitW - 4, unitH - 4);
+    const lampX = ux + (unitW - lampDots * 2) / 2;
+    if (images) {
+      const image = i < litCount ? images.on : images.off;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(image, lampX, y + 6, lampDots * 2, lampDots * 2);
+      ctx.drawImage(image, lampX, y + 34, lampDots * 2, lampDots * 2);
+      continue;
+    }
     const color = i < litCount ? colors.red : colors.surface;
-    drawLamp(ctx, ux + (unitW - lampDots * 2) / 2, y + 6, color);
-    drawLamp(ctx, ux + (unitW - lampDots * 2) / 2, y + 34, color);
+    drawLamp(ctx, lampX, y + 6, color);
+    drawLamp(ctx, lampX, y + 34, color);
   }
 }
 
