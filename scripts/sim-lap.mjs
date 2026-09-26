@@ -554,7 +554,178 @@ for (const kind of ['grass', 'gravel']) {
   }
   console.log(`  ${kind}: 500 → ${m.carParams.surfaces[kind].speedCap} px/秒 まで ${parts.join(' / ')}`);
 }
-console.log('  (仕様 8 節の目安: 芝生 → 260 はアクセルを離して約 0.5 秒・踏んだまま約 1.2 秒、砂利 → 180 は約 0.6 秒・約 0.9 秒)');
+console.log('  (仕様 8 節の目安: 芝生 → 260 はアクセルを離して約 0.3 秒・踏んだまま約 0.45 秒、砂利 → 180 は約 0.35 秒・約 0.5 秒)');
+
+// はみ出しの損 (car-physics.md 16.2 節の 5): 直線を 500 px/秒 で走り、k 輪が T 秒コース外に出てから戻ったときに、3000 px 先に着くのが遅れる時間
+{
+  const lossOf = (kind, wheels, offTime) => {
+    const run = (w) => {
+      let t = 0;
+      let wheel = 0;
+      const env = { surfaceAt: () => (t < offTime && wheel++ % 4 < w ? kind : 'asphalt'), wallContact: flat.wallContact };
+      const car = new m.Car(env);
+      car.placeAt({ x: 0, y: 0, heading: 0 });
+      car.sF = 500;
+      const c = m.createControls();
+      c.throttle = 1;
+      while (-car.y < 3000) { wheel = 0; car.update(c, dt); t += dt; }
+      return t;
+    };
+    return run(wheels) - run(0);
+  };
+  for (const kind of ['grass', 'gravel']) {
+    const one = lossOf(kind, 1, 0.5), two = lossOf(kind, 2, 0.5), all = lossOf(kind, 4, 1.0);
+    console.log(`  ${kind}: はみ出しの損 1 輪 0.5 秒 ${one.toFixed(2)} 秒 / 2 輪 0.5 秒 ${two.toFixed(2)} 秒 / 4 輪 1 秒 ${all.toFixed(2)} 秒`);
+    check(all >= 0.3 && all <= 1.0, `${kind}: 4 輪が 1 秒コース外に出たときの損が 0.3〜1.0 秒 (16.2 節の 5)`, `${all.toFixed(2)} 秒`);
+    check(two < 0.3, `${kind}: 1・2 輪を 0.5 秒はみ出しただけなら、損はミス 1 回分 (0.3 秒) 未満`, `1 輪 ${one.toFixed(2)} 秒 / 2 輪 ${two.toFixed(2)} 秒`);
+  }
+}
+
+// コース外の近道 (physicsVersion 4 で芝生・砂利の追加減速を強めた理由)。
+// レーシングライン上の 2 点 A・B を結ぶ直線のうち、コース外を通り、壁に当たらず、ゲートを飛ばさないものを探し、
+// 「A→B をレーシングラインどおり」と「A→B を直線」を同じ運転 (A→B は一定の目標速度で、目標速度は経路ごとに最もよい値、
+// B のあとは速度プロファイル) で走らせて、B の 300 px 先に着く時間を比べる。人がやりがちな「コーナーを 2 輪出してまっすぐ抜ける」
+// 「S 字を直進する」の形で、第 3 版では S 字 (T2・T3) で約 0.18 秒、T5→T6 で約 0.17 秒、T6 で約 0.10 秒、T8 で約 0.05 秒速かった
+console.log('\n== コース外の近道 (芝生・砂利を通る直線とレーシングラインの比較) ==');
+{
+  const legalLine = new m.RacingLine(track, { tyreGrip: 1.08, edgeMargin: 11, kerbUse: 8 });
+  const P = m.carParams;
+  const n = legalLine.count;
+  const gateCross = (ax, ay, bx, by, g) => {
+    const rx = bx - ax, ry = by - ay, sx = g.bx - g.ax, sy = g.by - g.ay;
+    const den = rx * sy - ry * sx;
+    if (den === 0) return false;
+    const qx = g.ax - ax, qy = g.ay - ay;
+    const t = (qx * sy - qy * sx) / den, u = (qx * ry - qy * rx) / den;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+  };
+  const wallFree = (ax, ay, bx, by) => {
+    const d = Math.hypot(bx - ax, by - ay);
+    const k = Math.ceil(d / 2);
+    for (let q = 0; q <= k; q++) if (track.surfaceCodeAt(ax + ((bx - ax) * q) / k, ay + ((by - ay) * q) / k) === m.SurfaceCode.wall) return false;
+    return true;
+  };
+  /** 折れ線 pts を pure pursuit で走る。switchAt 番目の区間までは目標速度 vk、そのあとは spd。着くまでの時間 (壁に当たったら null) */
+  const drive = (pts, spd, switchAt, vk, v0) => {
+    const car = new m.Car(track, P);
+    car.placeAt({ x: pts[0].x, y: pts[0].y, heading: Math.atan2(pts[1].x - pts[0].x, -(pts[1].y - pts[0].y)) });
+    car.sF = v0;
+    const c = m.createControls();
+    c.steerIsAnalog = true;
+    let seg = 0;
+    let t = 0;
+    const last = pts.length - 2;
+    const progress = (k) => {
+      const a = pts[k], b = pts[k + 1];
+      const ux = b.x - a.x, uy = b.y - a.y;
+      return ((car.x - a.x) * ux + (car.y - a.y) * uy) / (ux * ux + uy * uy);
+    };
+    while (t < 20) {
+      while (seg < last && progress(seg) >= 1) seg++;
+      if (seg === last && progress(seg) >= 1) return t;
+      const v = Math.max(0, car.sF);
+      // 先読み点: 今の区間上の足から折れ線に沿って 40 + 0.2v 先
+      let need = 40 + v * 0.2;
+      let k = seg;
+      const along = Math.max(0, progress(k));
+      let px = pts[k].x + (pts[k + 1].x - pts[k].x) * along, py = pts[k].y + (pts[k + 1].y - pts[k].y) * along;
+      let rem = Math.hypot(pts[k + 1].x - px, pts[k + 1].y - py);
+      while (need > rem && k < last) { need -= rem; k++; px = pts[k].x; py = pts[k].y; rem = Math.hypot(pts[k + 1].x - px, pts[k + 1].y - py); }
+      const f = rem > 0 ? Math.min(need, rem) / rem : 0;
+      const dx = px + (pts[k + 1].x - px) * f - car.x, dy = py + (pts[k + 1].y - py) * f - car.y;
+      const sin = Math.sin(car.heading), cos = Math.cos(car.heading);
+      const alpha = Math.atan2(dx * cos + dy * sin, dx * sin - dy * cos);
+      const desiredYaw = ((2 * Math.sin(alpha)) / Math.max(1, Math.hypot(dx, dy))) * Math.max(v, 1);
+      const yawLimit = v > 0 ? Math.min(P.yawMaxLow * Math.min(1, v / P.yawRampSpeed), (P.latGrip * P.steerDemand) / v) : P.yawMaxLow;
+      c.steerInput = Math.max(-1, Math.min(1, desiredYaw / Math.max(yawLimit, 1e-3)));
+      const target = seg < switchAt ? vk : spd[Math.min(seg + 2, spd.length - 1)];
+      c.throttle = v < target - 1 ? 1 : 0;
+      c.brake = v > target + 3 ? Math.min(1, (v - target) / 20) : 0;
+      car.update(c, dt);
+      t += dt;
+      if (car.wallImpact > 0) return null;
+    }
+    return null;
+  };
+  const bestTime = (pts, spd, switchAt, v0) => {
+    let best = null;
+    for (let vk = 100; vk <= 525; vk += 5) {
+      const time = drive(pts, spd, switchAt, vk, v0);
+      if (time !== null && (best === null || time < best.time)) best = { time, vk };
+    }
+    return best;
+  };
+  const cornerOf = (s) => {
+    let id = '';
+    let bd = Infinity;
+    for (const cn of track.corners) {
+      const d = Math.abs(track.deltaS((cn.s0 + cn.s1) / 2, s));
+      if (d < bd) { bd = d; id = cn.id; }
+    }
+    return id;
+  };
+  // 候補: 線に沿って 25 px 以上短く、直線の中心と左右 10 px が壁に当たらず、途中のゲートをすべて横切り、コース外を通る
+  const byCorner = new Map();
+  for (let i = 0; i < n; i += 4) {
+    for (let j = i + 8; j < i + Math.round(1200 / legalLine.spacing); j += 4) {
+      const jj = j % n;
+      const ax = legalLine.xs[i], ay = legalLine.ys[i], bx = legalLine.xs[jj], by = legalLine.ys[jj];
+      const dist = Math.hypot(bx - ax, by - ay);
+      const saving = ((legalLine.distances[jj] - legalLine.distances[i] + legalLine.length) % legalLine.length) - dist;
+      if (saving < 25) continue;
+      const nx = (-(by - ay) / dist) * 10, ny = ((bx - ax) / dist) * 10;
+      if (!wallFree(ax, ay, bx, by) || !wallFree(ax + nx, ay + ny, bx + nx, by + ny) || !wallFree(ax - nx, ay - ny, bx - nx, by - ny)) continue;
+      const sa = legalLine.trackS[i], sb = legalLine.trackS[jj];
+      const span = track.deltaS(sa, sb);
+      if (track.checkpoints.some((g) => { const rel = track.deltaS(sa, g.s); return rel > 0 && rel < span && !gateCross(ax, ay, bx, by, g); })) continue;
+      let off = 0;
+      const k = Math.ceil(dist / 8);
+      for (let q = 0; q <= k; q++) {
+        const code = track.surfaceCodeAt(ax + ((bx - ax) * q) / k, ay + ((by - ay) * q) / k);
+        if (code === m.SurfaceCode.grass || code === m.SurfaceCode.gravel) off++;
+      }
+      if (off < 3) continue;
+      const id = cornerOf((sa + sb) / 2);
+      if (!byCorner.has(id)) byCorner.set(id, []);
+      byCorner.get(id).push({ i, jj, sa, sb, saving, offRatio: off / (k + 1) });
+    }
+  }
+  const after = Math.round(300 / legalLine.spacing);
+  let checked = 0;
+  for (const [id, list] of byCorner) {
+    // 短くなる量の大きい順に、似た候補を間引いて最大 12 本
+    list.sort((a, b) => b.saving - a.saving);
+    const picked = [];
+    for (const cd of list) {
+      if (picked.every((p) => Math.abs(p.i - cd.i) > 6 || Math.abs(p.jj - cd.jj) > 6)) picked.push(cd);
+      if (picked.length >= 12) break;
+    }
+    let best = null;
+    for (const cd of picked) {
+      const rest = (cd.jj - cd.i + n) % n;
+      const legal = [], legalSpd = [];
+      for (let q = 0; q <= rest + after; q++) {
+        const k = (cd.i + q) % n;
+        legal.push({ x: legalLine.xs[k], y: legalLine.ys[k] });
+        legalSpd.push(legalLine.speeds[k]);
+      }
+      const cut = [legal[0], ...legal.slice(rest)];
+      const cutSpd = [legalSpd[0], ...legalSpd.slice(rest)];
+      const v0 = legalLine.speeds[cd.i];
+      const onTrack = bestTime(legal, legalSpd, rest, v0);
+      const shortcut = bestTime(cut, cutSpd, 1, v0);
+      if (!onTrack || !shortcut) continue;
+      const gain = onTrack.time - shortcut.time;
+      if (!best || gain > best.gain) best = { ...cd, gain, onTrack, shortcut };
+    }
+    if (!best) continue;
+    checked++;
+    check(best.gain < 0, `${id} 付近: コース外を通る近道がコース上より速くない`,
+      `s=${best.sa.toFixed(0)}→${best.sb.toFixed(0)} (${best.saving.toFixed(0)} px 短い、直線の ${Math.round(best.offRatio * 100)}% がコース外) コース上 ${best.onTrack.time.toFixed(2)} 秒 / 近道 ${best.shortcut.time.toFixed(2)} 秒 → 近道の得 ${best.gain >= 0 ? '+' : ''}${best.gain.toFixed(3)} 秒`);
+  }
+  // S 字 (T2・T3) と T5・T6・T8 は第 3 版で近道が速かった場所。候補が見つからなくなったら探し方がおかしい
+  check(['T2', 'T3', 'T5', 'T6', 'T8'].every((id) => byCorner.has(id)), '第 3 版で近道が速かった S 字・T5・T6・T8 で近道の候補が見つかる', `候補のあるコーナー ${checked} か所`);
+}
 
 
 // ---------------------------------------------------------------- レビューの指摘の再発確認

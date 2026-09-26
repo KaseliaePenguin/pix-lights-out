@@ -4,8 +4,11 @@
  * ゴースト・自己ベストは、両方の組 (recordVersionOf) が保存時と違えば破棄する。
  */
 
-/** 物理のバージョン番号。CarParams・路面テーブル・当たり判定の計算を変えたら上げる (2: 第 4 版、3: 第 4 版からドリフト・ERS を除いた版) */
-export const physicsVersion = 3;
+/**
+ * 物理のバージョン番号。CarParams・路面テーブル・当たり判定の計算を変えたら上げる
+ * (2: 第 4 版、3: 第 4 版からドリフト・ERS を除いた版、4: 芝生・砂利の追加減速を強めた版)
+ */
+export const physicsVersion = 4;
 
 /**
  * 自己ベスト・ゴーストが今のゲームで使えるかを表す文字列 (`物理のバージョン-コースのバージョン`)。
@@ -162,12 +165,14 @@ export const carParams: Readonly<CarParams> = {
   visualSlipStart: 0.9,
   visualSlipGain: 25 * deg,
   visualSlipMax: 6 * deg,
+  // 芝生・砂利の capDecel は、コース外を通る近道 (2 輪を出してコーナーをまっすぐ抜ける、S 字を直進する) が
+  // コース上より速くならない最小限の値 (physicsVersion 4。scripts/sim-lap.mjs の「コース外の近道」で確かめる)
   surfaces: {
     asphalt: { grip: 1.0, brake: 1.0, accel: 1.0, speedCap: Infinity, capDecel: 0, isOffTrack: false },
     kerb: { grip: 0.97, brake: 0.95, accel: 1.0, speedCap: Infinity, capDecel: 0, isOffTrack: false },
     pit: { grip: 1.0, brake: 1.0, accel: 1.0, speedCap: Infinity, capDecel: 0, isOffTrack: false },
-    grass: { grip: 0.7, brake: 0.55, accel: 0.75, speedCap: 260, capDecel: 400, isOffTrack: true },
-    gravel: { grip: 0.5, brake: 0.45, accel: 0.6, speedCap: 180, capDecel: 500, isOffTrack: true },
+    grass: { grip: 0.7, brake: 0.55, accel: 0.75, speedCap: 260, capDecel: 750, isOffTrack: true },
+    gravel: { grip: 0.5, brake: 0.45, accel: 0.6, speedCap: 180, capDecel: 850, isOffTrack: true },
   },
   squealStart: 0.95,
   squealRange: 0.25,

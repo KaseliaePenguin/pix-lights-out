@@ -20,8 +20,10 @@ const defaultOptions: RacingLineOptions = {
   tyreGrip: 1.0,
   skill: 1.0,
   useDrs: true,
-  edgeMargin: 11,
-  kerbUse: 4,
+  // 追従の誤差 (コーナーの出口で外に約 8 px ふくらむ) があっても車輪が芝生・砂利に出ないだけの余裕。
+  // 11 / 4 のときは CPU が 1 周に約 5 秒、片側の車輪をコース外に出していて、芝生・砂利の減速を強めると大きく遅くなった
+  edgeMargin: 24,
+  kerbUse: 10,
   params: carParams,
 };
 

@@ -14,13 +14,15 @@ const hairpinOpenInside = 300;
  * 仕様からの変更 (ユーザーの要望「U 字コーナーが曲がりづらい」とユーザーの yawMaxLow 2.0 に合わせて、コース側を緩やかにした):
  * 半径 T6 90→120、T7 55→140、T8 40→70 (幅 90 で内側の端が中心を越えていたため)、T9 100→130、T11 120→160。
  * 閉じるように st3 2534.3→2730、st4 2334.9→2182.2。
- * S 字 (T2・T3) の内側を横切る近道 (見積もり約 0.27 秒得) を小さくするため、内側を芝生 30 → 砂利 40 にした (残りは約 0.17 秒以下の見積もり)
+ * S 字 (T2・T3) の内側を横切る近道 (見積もり約 0.27 秒得) を小さくするため、内側を芝生 30 → 砂利 40 にした (残りは約 0.17 秒以下の見積もり)。
+ * version 4: S 字をまっすぐ抜ける近道 (両方の内側を縁石の外 45 px まで使う) は、内側の砂利の外の芝生 (直線のランオフ) を通っていたので、
+ * 内側を砂利 40 → 60 に広げ、S 字の間の直線 st2 の両側まで伸ばした (T2 は後ろに 200 px、T3 は手前に 200 px)
  */
 export const course1: TrackData = {
   id: 'course1',
   name: 'COURSE 1',
-  // 1: 最初の版 / 2: ヘアピンの間の壁の修正、区間 S1 の境界の変更 / 3: 第 4 版で作り直し
-  version: 3,
+  // 1: 最初の版 / 2: ヘアピンの間の壁の修正、区間 S1 の境界の変更 / 3: 第 4 版で作り直し / 4: S 字の内側の砂利を広げた
+  version: 4,
   startHeading: 0,
   defaultWidth: 80,
   lineWidth: 4,
@@ -32,9 +34,9 @@ export const course1: TrackData = {
     { kind: 'straight', id: 'main1', length: 1900 },
     { kind: 'turn', id: 'T1', angle: 90, radius: 60, outside: gravel(160, 120, 200), inside: grass(30) },
     { kind: 'straight', id: 'st1', length: 900 },
-    { kind: 'turn', id: 'T2', angle: -90, radius: 70, outside: grass(120), inside: gravel(40) },
+    { kind: 'turn', id: 'T2', angle: -90, radius: 70, outside: grass(120), inside: gravel(60, 100, 200) },
     { kind: 'straight', id: 'st2', length: 200 },
-    { kind: 'turn', id: 'T3', angle: 90, radius: 70, outside: grass(120), inside: gravel(40) },
+    { kind: 'turn', id: 'T3', angle: 90, radius: 70, outside: grass(120), inside: gravel(60, 200, 100) },
     { kind: 'straight', id: 'st3', length: 2730 },
     { kind: 'turn', id: 'T4', angle: 90, radius: 120, outside: grass(160), inside: grass(30) },
     { kind: 'straight', id: 'st4', length: 2182.2 },
@@ -94,6 +96,6 @@ export const course1: TrackData = {
     entryPoint: 1,
     exitPoint: 5,
   },
-  // 腕前 1.0 の CPU (ミス・個体差なし、ソフト、DRS は区間内で自由) の実測 (scripts/sim-lap.mjs、physicsVersion 3)
-  referenceLapTime: 36.42,
+  // 腕前 1.0 の CPU (ミス・個体差なし、ソフト、DRS は区間内で自由) の実測 (scripts/sim-lap.mjs、physicsVersion 4)
+  referenceLapTime: 36.45,
 };
