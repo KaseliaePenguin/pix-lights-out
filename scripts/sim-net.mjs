@@ -278,6 +278,28 @@ console.log('\n== 壊れたコード・種類違い・バージョン違い ==')
   check(!r.ok && r.error === 'wrongKind' && r.kind === 'reply', '参加者が返答コードを貼った → 種類違い (kind = reply)');
 }
 
+console.log('\n== 招待リンク ==');
+{
+  const invite = await m.encodeConnectionCode({ kind: 'invite', lobbyId, slot: 2, sdp: chromeSdp({ setup: 'actpass', candidates: chromeCandidates() }) });
+  const link = m.inviteLinkOf('https://example.com/pix/', invite);
+  check(link === `https://example.com/pix/#join=${invite}`, '招待リンクの形 (<ページの URL>#join=PLO1I.…)', `${link.length} 文字`);
+  check(m.inviteLinkOf('https://example.com/pix/#join=PLO1I.old', invite) === link, '元の URL のフラグメントは付け替える');
+  check(m.inviteCodeFromHash(`#join=${invite}`) === invite, 'location.hash から招待コードを取り出す');
+  check(m.inviteCodeFromHash('') === null && m.inviteCodeFromHash('#top') === null && m.inviteCodeFromHash('#join=') === null
+    && m.inviteCodeFromHash(`#x=${invite}`) === null, '招待リンクでないフラグメントは null');
+  check(m.extractConnectionCode(link) === invite && m.extractConnectionCode(invite) === invite, '貼り付け: リンクでもコードだけでも取り出せる');
+  check(m.extractConnectionCode(`招待だよ ${link.slice(0, 50)}\n${link.slice(50)} よろしく`) === invite, '貼り付け: 改行・前後の文が混ざったリンク');
+  check(m.extractConnectionCode(`join me: ${link} thanks!`) === invite && m.extractConnectionCode(`${invite}\nsee you`) === invite,
+    '貼り付け: 後ろに英単語が続いても、空白で区切ってチェックサムが合うほうを取る');
+  check(m.checkConnectionCode(`join me: ${link} thanks`, 'invite').ok, '後ろに英単語が続くリンクも招待コードとして読める');
+  check(m.extractConnectionCode(`https://example.com/PLO9X.abc/#join=${invite}`) === invite, 'ページの URL にコードに似た文字があっても #join= 以降を読む');
+  check(m.extractConnectionCode('https://example.com/pix/') === null && m.extractConnectionCode('') === null, 'コードがなければ null');
+  const d = await m.decodeConnectionCode(link, 'invite');
+  check(d.ok && d.code.slot === 2 && m.checkConnectionCode(link, 'invite').ok, 'リンクをそのまま読んでも招待コードとして読める');
+  const asReply = m.checkConnectionCode(link, 'reply');
+  check(!asReply.ok && asReply.error === 'wrongKind', 'ホストが招待リンクを貼った → 種類違い');
+}
+
 console.log('\n== アドレスの変換 ==');
 {
   const cases = [

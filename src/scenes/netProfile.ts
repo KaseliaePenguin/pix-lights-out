@@ -3,7 +3,7 @@ import { isValidPlayerName } from '../shared/net/messages';
 
 /**
  * オンライン対戦の名前とチーム。次に開いたときも同じ値で始められるよう localStorage に残す
- * (保存できない環境では起動中だけ覚える)
+ * (保存できない環境では起動中だけ覚える)。初回は入力画面を出さず PLAYER + 乱数 2 桁で始め、ロビーでいつでも変えられる
  */
 const storageKey = 'pix-lights-out:net-profile';
 
@@ -17,7 +17,7 @@ export function filterPlayerName(text: string): string {
 export function loadNetProfile(): NetProfile {
   if (!current) {
     current = readStored() ?? {
-      name: `DRIVER${String(Math.floor(Math.random() * 100)).padStart(2, '0')}`,
+      name: `PLAYER${String(Math.floor(Math.random() * 100)).padStart(2, '0')}`,
       team: 1 + Math.floor(Math.random() * 8),
     };
   }

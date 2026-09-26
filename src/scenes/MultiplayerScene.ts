@@ -18,8 +18,8 @@ const labels: Record<MultiplayerItem, string> = {
   back: 'BACK',
 };
 const notes: Record<MultiplayerItem, string> = {
-  host: 'BE THE HOST. SEND AN INVITE CODE TO EACH PLAYER AND PASTE THEIR REPLY CODES.',
-  join: 'PASTE THE INVITE CODE FROM THE HOST AND SEND YOUR REPLY CODE BACK.',
+  host: 'BE THE HOST. SEND AN INVITE LINK TO EACH PLAYER AND PASTE THEIR REPLY CODES.',
+  join: 'OPEN THE INVITE LINK FROM THE HOST (OR PASTE IT HERE) AND SEND YOUR REPLY CODE BACK.',
   back: '',
 };
 

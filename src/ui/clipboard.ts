@@ -18,7 +18,11 @@ export async function copyText(text: string, fallback: HTMLTextAreaElement | nul
     fallback.focus();
     fallback.select();
     // 古い方法 (非推奨だが、navigator.clipboard が使えない環境の代わり)
-    return document.execCommand('copy');
+    const ok = document.execCommand('copy');
+    // コピーできたら欄からフォーカスを外す (欄の中のキーはゲームに届かず、次の ENTER が効かなくなるため)。
+    // できなかったときは選択したまま残し、Ctrl+C してもらう
+    if (ok) fallback.blur();
+    return ok;
   } catch {
     return false;
   }

@@ -12,6 +12,10 @@ export const netTexts = {
   ipWarning:
     'THIS CODE CONTAINS YOUR INTERNET IP ADDRESS. GIVE IT ONLY TO PEOPLE YOU TRUST, ONE BY ONE (E.G. BY DM). ' +
     'DO NOT POST IT ON SNS OR IN PUBLIC PLACES.',
+  /** ホストの招待リンク用 (中身は招待コードなので同じ注意) */
+  ipWarningLink:
+    'THIS LINK CONTAINS YOUR INTERNET IP ADDRESS. GIVE IT ONLY TO PEOPLE YOU TRUST, ONE BY ONE (E.G. BY DM). ' +
+    'DO NOT POST IT ON SNS OR IN PUBLIC PLACES.',
   hostNotice:
     'HOST: DO NOT CLOSE OR RELOAD THIS TAB DURING A RACE. IF YOU SWITCH TABS, THE RACE GOES ON BUT YOUR CAR STOPS.',
   hostRaceStart: 'HOST: KEEP THIS TAB IN FRONT',
@@ -26,7 +30,7 @@ export const netTexts = {
   connectFailedGuide: [
     'COULD NOT CONNECT.',
     'DEPENDING ON YOUR NETWORKS (SYMMETRIC NAT, CARRIER-GRADE NAT, STRICT FIREWALLS, ETC.), THIS METHOD MAY NOT WORK. TRY:',
-    '1. TRY AGAIN (WITH A NEW INVITE CODE)',
+    '1. TRY AGAIN (WITH A NEW INVITE LINK)',
     '2. ASK SOMEONE ELSE TO HOST',
     '3. ONE OF YOU USES ANOTHER LINE, E.G. PHONE TETHERING',
     '4. PLAY ON THE SAME LAN (SAME WI-FI)',
@@ -36,8 +40,8 @@ export const netTexts = {
     'YOU SEEM TO BE ON THE SAME NETWORK, BUT COULD NOT CONNECT. NETWORKS THAT BLOCK DEVICES FROM TALKING TO EACH OTHER ' +
     '(E.G. GUEST WI-FI) CANNOT BE USED. SWITCH TO ANOTHER NETWORK.',
   noResponse: 'NO RESPONSE AFTER CONNECTING. RELOAD THE PAGE AND TRY AGAIN.',
-  replyTimedOut: 'TIME IS UP. ASK THE HOST FOR A NEW INVITE CODE.',
-  expired: 'EXPIRED. ISSUE A NEW INVITE CODE AND SEND IT.',
+  replyTimedOut: 'TIME IS UP. ASK THE HOST FOR A NEW INVITE LINK.',
+  expired: 'EXPIRED. MAKE A NEW INVITE AND SEND THE LINK.',
 };
 
 /** 貼り付けたコードの形式の誤り。expected は待っているコードの種類 */
@@ -47,8 +51,8 @@ export function codeErrorText(error: CodeError, expected: 'invite' | 'reply'): s
       return 'THE CODE IS NOT VALID. CHECK THAT IT IS NOT CUT OFF, AND COPY IT AGAIN.';
     case 'wrongKind':
       return expected === 'invite'
-        ? 'THIS IS A REPLY CODE. PASTE THE INVITE CODE FROM THE HOST.'
-        : 'THIS IS AN INVITE CODE. PASTE THE REPLY CODE FROM A PLAYER.';
+        ? 'THIS IS A REPLY CODE. PASTE THE INVITE LINK FROM THE HOST.'
+        : 'THIS IS AN INVITE LINK. PASTE THE REPLY CODE FROM A PLAYER.';
     case 'version':
       return 'THE GAME VERSIONS DIFFER. EVERYONE SHOULD RELOAD THE PAGE TO GET THE LATEST VERSION.';
     case 'unsupported':
@@ -62,13 +66,13 @@ export function acceptErrorText(error: AcceptReplyError): string {
     case 'otherLobby':
       return 'THIS REPLY CODE IS NOT FOR THIS LOBBY.';
     case 'notInvited':
-      return 'NO INVITE CODE WAS ISSUED FOR THIS SLOT.';
+      return 'NO INVITE WAS MADE FOR THIS SLOT.';
     case 'slotUsed':
       return 'THIS SLOT IS ALREADY IN USE.';
     case 'expired':
       return netTexts.expired;
     case 'failed':
-      return 'THIS SLOT HAS FAILED. ISSUE A NEW INVITE CODE AND SEND IT.';
+      return 'THIS SLOT HAS FAILED. MAKE A NEW INVITE AND SEND THE LINK.';
     default:
       return codeErrorText(error, 'reply');
   }
@@ -113,7 +117,7 @@ export function rejectText(reason: RejectReason): string {
     case 'version':
       return codeErrorText('version', 'invite');
     case 'raceInProgress':
-      return 'A RACE IS IN PROGRESS. ASK THE HOST FOR A NEW INVITE CODE AFTER THE RACE.';
+      return 'A RACE IS IN PROGRESS. ASK THE HOST FOR A NEW INVITE LINK AFTER THE RACE.';
   }
 }
 

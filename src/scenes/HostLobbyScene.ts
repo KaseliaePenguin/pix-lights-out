@@ -4,6 +4,7 @@ import { HostLobby } from '../host/HostLobby';
 import type { HostSlotView } from '../host/HostLobby';
 import type { NetProfile } from '../net/NetClientSession';
 import type { NetRaceClient } from '../net/NetRaceClient';
+import { inviteLinkOf } from '../shared/net/connectionCode';
 import { copyText, readClipboardText } from '../ui/clipboard';
 import { colors } from '../ui/colors';
 import { drawLobbyList, lobbyListHeight, lobbyRowRect } from '../ui/lobbyList';
@@ -23,18 +24,18 @@ import { NetRaceScene } from './NetRaceScene';
 import { loadNetProfile, saveNetProfile } from './netProfile';
 import { lapChoicesOnline, nextFreeTeam } from './lobbyRules';
 
-type HostItem = 'name' | 'team' | 'ready' | 'laps' | 'invite' | 'slot' | 'paste' | 'start' | 'close';
+type HostItem = 'invite' | 'start' | 'paste' | 'slot' | 'name' | 'team' | 'laps' | 'close';
 
-const items: readonly HostItem[] = ['name', 'team', 'ready', 'laps', 'invite', 'slot', 'paste', 'start', 'close'];
+/** よく使う順 (招待 → スタート)。ホスト本人の準備完了は START RACE で自動で付ける */
+const items: readonly HostItem[] = ['invite', 'start', 'paste', 'slot', 'name', 'team', 'laps', 'close'];
 const labels: Record<HostItem, string> = {
+  invite: 'NEW INVITE',
+  start: 'START RACE',
+  paste: 'PASTE REPLY',
+  slot: 'SLOT',
   name: 'NAME',
   team: 'TEAM',
-  ready: 'READY',
   laps: 'LAPS',
-  invite: 'ISSUE INVITE CODE',
-  slot: 'SLOT',
-  paste: 'PASTE REPLY',
-  start: 'START RACE',
   close: 'CLOSE LOBBY',
 };
 
@@ -51,14 +52,17 @@ const codeW = 776;
 const codeH = 204;
 const buttonW = 136;
 const buttonX = codeX + codeW - buttonW - 10;
+/** 大きなコピーの案内の枠 */
+const promptRect = { x: codeX + 10, y: codeY + 8, w: codeW - 20, h: 52 };
 /** ロビーを閉じる操作を確かめる時間 (秒)。参加者がいるときは 2 回押してもらう */
 const closeConfirmTime = 3;
 /** START を押してから、ホスト本人の準備完了が届くのを待つ時間 (秒) */
 const startWaitTime = 2;
 
 /**
- * ロビー (ホスト、network.md「ホストの画面」)。参加者一覧 8 枠、招待コードの発行・コピー、返答コードの貼り付け (どこでも Ctrl+V)、
- * 枠の取り消し、[詳細をコピー]、周回数、スタート。招待コード・貼り付け・名前は Canvas に重ねた DOM で扱う。
+ * ロビー (ホスト、network.md「ホストの画面」)。参加者一覧 8 枠、招待リンクの発行・コピー、返答コードの貼り付け (どこでも Ctrl+V)、
+ * 枠の取り消し、[詳細をコピー]、周回数、スタート。ロビーを作った直後に枠 1 の招待を自動で発行し、できたら自動でコピーを試す
+ * (できなければ「ENTER でコピー」の大きな案内)。招待リンク・貼り付け・名前は Canvas に重ねた DOM で扱う。
  * lobby を渡すとそのロビーに戻る (リザルトから)。null なら新しく作る。
  */
 export class HostLobbyScene implements Scene {
@@ -67,13 +71,17 @@ export class HostLobbyScene implements Scene {
   private inviteBox: HTMLTextAreaElement | null = null;
   private profile: NetProfile;
   private selected = 0;
-  /** 招待コード欄に出している枠 (1〜7) */
+  /** 招待リンク欄に出している枠 (1〜7) */
   private viewSlot = 1;
   private loadingUpdates = 0;
   private closeConfirmRemaining = 0;
   private startWaitRemaining = 0;
   private isAwaitingJoin = false;
   private isCheckingCode = false;
+  /** 招待を作っている (発行はユーザー操作のあと最大 5 秒かかる) */
+  private isIssuing = false;
+  /** 今の招待リンクをコピーした枠 (新しく発行したら外す) */
+  private readonly copiedSlots = new Set<number>();
   /** 枠ごとの前回の状態 (参加・失敗・退出の知らせを出すため)。枠 1〜7 → 状態と参加者名 */
   private readonly lastSlotStates = new Map<number, string>();
 
@@ -83,7 +91,7 @@ export class HostLobbyScene implements Scene {
   ) {
     this.lobby = lobby;
     this.profile = lobby ? { ...lobby.session.profile } : loadNetProfile();
-    if (lobby) this.selected = items.indexOf('ready');
+    if (lobby) this.selected = items.indexOf('start');
   }
 
   enter(): void {
@@ -91,10 +99,10 @@ export class HostLobbyScene implements Scene {
     this.ui = new LobbyUi(this.game, {
       onPaste: (text) => void this.acceptReply(text),
       onNameCommit: (name) => this.commitName(name),
-      nameRect: { x: menuX + 170, y: menuY + 1, w: 150, h: 22 },
+      nameRect: { x: menuX + 170, y: menuY + items.indexOf('name') * menuRowH + 1, w: 150, h: 22 },
     });
     this.ui.showName(this.profile.name);
-    this.inviteBox = this.ui.overlay.addCodeBox('invite-code', { x: codeX + 10, y: codeY + 30, w: buttonX - codeX - 20, h: 60 });
+    this.inviteBox = this.ui.overlay.addCodeBox('invite-code', { x: codeX + 10, y: codeY + 66, w: buttonX - buttonW - codeX - 30, h: 32 });
     this.ui.overlay.addPasteBox(
       'paste-input',
       { x: menuX + 190, y: menuY + items.indexOf('paste') * menuRowH + 1, w: 130, h: 22 },
@@ -167,8 +175,9 @@ export class HostLobbyScene implements Scene {
       return;
     }
     ui.beginRender();
-    drawText(ctx, 'HOST LOBBY', 12, 12, { scale: 4, color: colors.white });
-    drawText(ctx, 'CTRL+V ANYWHERE: PASTE A REPLY CODE', width - 12, 22, { color: colors.subtext, align: 'right' });
+    drawText(ctx, 'HOST LOBBY', 12, 6, { scale: 3, color: colors.white });
+    drawText(ctx, 'CTRL+V ANYWHERE: PASTE A REPLY CODE', width - 12, 12, { color: colors.subtext, align: 'right' });
+    ui.drawHint(ctx, this.hint(lobby));
 
     this.renderMenu(ctx, ui, lobby);
     this.renderList(ctx, ui, lobby);
@@ -187,6 +196,8 @@ export class HostLobbyScene implements Scene {
     guardHostTab(lobby);
     this.attach(lobby);
     this.game.resetClock();
+    // 最初の招待 (枠 1) はすぐ作り始める (ロビーを作る = 誰かを招待する、なので)
+    void this.issueInvite(true);
   }
 
   private attach(lobby: HostLobby): void {
@@ -232,6 +243,10 @@ export class HostLobbyScene implements Scene {
       if (key.startsWith('joined:') && player) {
         this.ui?.toast(`SLOT ${slot}: ${player.name} JOINED.`, colors.hudGreen);
         this.game.audio.playSe('ui-confirm');
+        // 待っている招待がなければ、次にすることはスタート
+        if (!before.startsWith('joined:') && !this.isIssuing && !this.ui?.isEditingName && !this.hasPendingInvite(lobby)) {
+          this.selected = items.indexOf('start');
+        }
       } else if (view.state === 'joined') {
         this.ui?.toast(`SLOT ${slot}: CONNECTED. WAITING FOR THE PLAYER TO JOIN...`, colors.text);
       } else if (view.state === 'failed') {
@@ -241,6 +256,10 @@ export class HostLobbyScene implements Scene {
         this.ui?.toast(`SLOT ${slot}: THE PLAYER LEFT.`, colors.text);
       }
     }
+  }
+
+  private hasPendingInvite(lobby: HostLobby): boolean {
+    return lobby.slots.some((s) => s.state === 'preparing' || s.state === 'inviting' || s.state === 'connecting');
   }
 
   private onRaceStart(lobby: HostLobby, race: NetRaceClient): void {
@@ -269,9 +288,6 @@ export class HostLobbyScene implements Scene {
         this.viewSlot = ((this.viewSlot - 1 + step + 7) % 7) + 1;
         audio.playSe('ui-cursor');
         break;
-      case 'ready':
-        this.toggleReady();
-        break;
       default:
         break;
     }
@@ -288,11 +304,10 @@ export class HostLobbyScene implements Scene {
         break;
       case 'team':
       case 'laps':
-      case 'ready':
         this.change(item, 1);
         break;
       case 'invite':
-        void this.issueInvite();
+        this.inviteAction();
         break;
       case 'slot':
         this.slotAction();
@@ -360,47 +375,76 @@ export class HostLobbyScene implements Scene {
     lobby.session.join(this.profile);
   }
 
-  private toggleReady(): void {
-    const session = this.lobby?.session;
-    if (!session || session.state !== 'lobby') return;
-    session.setReady(!(session.me?.isReady ?? false));
-    this.game.audio.playSe('ui-confirm');
+  /** 招待の項目で決定: 今の招待をまだコピーしていなければコピー、コピー済みなら次の招待を作る */
+  private inviteAction(): void {
+    const view = this.lobby?.slot(this.viewSlot);
+    if (view?.state === 'inviting' && !this.copiedSlots.has(view.slot)) {
+      void this.copyInvite(view);
+      return;
+    }
+    if (this.isIssuing) {
+      this.game.audio.playSe('ui-error');
+      this.ui?.toast('PREPARING THE INVITE LINK. WAIT A MOMENT.', colors.text);
+      return;
+    }
+    void this.issueInvite(false);
   }
 
-  private async issueInvite(): Promise<void> {
+  /** isAuto = ロビーを作った直後の自動の発行 */
+  private async issueInvite(isAuto: boolean): Promise<void> {
     const lobby = this.lobby;
-    if (!lobby) return;
+    if (!lobby || this.isIssuing) return;
     const audio = this.game.audio;
-    const free = lobby.slots.find((s) => s.state === 'empty' || s.state === 'failed');
+    const slots = lobby.slots;
+    // HostLobby.issueInvite と同じ順 (空き → 失敗) で次に使う枠を選び、準備中の表示をその枠に合わせる
+    const free = slots.find((s) => s.state === 'empty') ?? slots.find((s) => s.state === 'failed');
     if (!free) {
       audio.playSe('ui-error');
       this.ui?.toast('NO OPEN SLOT. THE LOBBY IS FULL (8 PLAYERS).');
       return;
     }
-    audio.playSe('ui-confirm');
+    if (!isAuto) audio.playSe('ui-confirm');
+    this.isIssuing = true;
     this.viewSlot = free.slot;
-    const view = await lobby.issueInvite();
-    if (!view || this.lobby !== lobby) return;
+    this.copiedSlots.delete(free.slot);
+    let view: HostSlotView | null = null;
+    try {
+      view = await lobby.issueInvite();
+    } finally {
+      this.isIssuing = false;
+    }
+    if (!view || this.lobby !== lobby || !this.ui) return;
     this.viewSlot = view.slot;
-    if (view.state === 'inviting') this.ui?.toast(`SLOT ${view.slot}: INVITE CODE READY. COPY IT AND SEND IT TO THE PLAYER.`, colors.hudGreen);
+    if (view.state !== 'inviting') return;
+    this.copiedSlots.delete(view.slot);
+    if (!this.ui.isEditingName) this.selected = items.indexOf('invite');
+    // コピーできる環境 (ページにフォーカスがあるなど) なら自動でコピーする。できなければ「ENTER でコピー」の案内のまま
+    await this.copyInvite(view, true);
   }
 
-  /** 枠の欄で決定: 招待中ならコードをコピー、失敗なら詳細をコピー、空きなら招待コードを発行 */
+  /** 枠の欄で決定: 招待中ならリンクをコピー、失敗なら詳細をコピー、空きなら招待を作る */
   private slotAction(): void {
     const view = this.lobby?.slot(this.viewSlot);
     if (!view) return;
     if (view.state === 'inviting') void this.copyInvite(view);
     else if (view.state === 'failed') void this.copyDetails();
-    else if (view.state === 'empty') void this.issueInvite();
+    else if (view.state === 'empty') void this.issueInvite(false);
     else this.game.audio.playSe('ui-error');
   }
 
-  private async copyInvite(view: HostSlotView): Promise<void> {
+  private inviteLink(code: string): string {
+    return inviteLinkOf(location.origin + location.pathname, code);
+  }
+
+  /** isAuto = 招待ができた時点で自動で試す (失敗しても知らせず、ENTER でコピーの案内を出したままにする) */
+  private async copyInvite(view: HostSlotView, isAuto = false): Promise<void> {
     if (!view.code) return;
-    const ok = await copyText(view.code, this.inviteBox);
+    const ok = await copyText(this.inviteLink(view.code), isAuto ? null : this.inviteBox);
+    if (isAuto && !ok) return;
+    if (ok) this.copiedSlots.add(view.slot);
     this.game.audio.playSe(ok ? 'ui-confirm' : 'ui-error');
     this.ui?.toast(
-      ok ? `SLOT ${view.slot}: INVITE CODE COPIED.` : 'COULD NOT COPY. SELECT THE CODE IN THE BOX AND PRESS CTRL+C.',
+      ok ? `SLOT ${view.slot}: INVITE LINK COPIED. SEND IT TO ONE FRIEND.` : 'COULD NOT COPY. SELECT THE LINK IN THE BOX AND PRESS CTRL+C.',
       ok ? colors.hudGreen : colors.yellow,
     );
   }
@@ -422,8 +466,9 @@ export class HostLobbyScene implements Scene {
       return;
     }
     lobby.cancelInvite(this.viewSlot);
+    this.copiedSlots.delete(this.viewSlot);
     this.game.audio.playSe('ui-cancel');
-    this.ui?.toast(`SLOT ${this.viewSlot}: CANCELLED. THE CODE CAN NO LONGER BE USED.`, colors.text);
+    this.ui?.toast(`SLOT ${this.viewSlot}: CANCELLED. THE LINK CAN NO LONGER BE USED.`, colors.text);
   }
 
   private async pasteFromClipboard(): Promise<void> {
@@ -508,6 +553,29 @@ export class HostLobbyScene implements Scene {
 
   // ---- 描画 ----
 
+  /** 今の招待の項目の名前 (コピー前はコピー、コピー後は次の招待) */
+  private inviteLabel(lobby: HostLobby): string {
+    if (this.isIssuing) return 'PREPARING INVITE...';
+    const view = lobby.slot(this.viewSlot);
+    return view?.state === 'inviting' && !this.copiedSlots.has(view.slot) ? 'COPY INVITE LINK' : labels.invite;
+  }
+
+  /** 画面の上に出す「いま何をすればよいか」(1 行、64 文字まで) */
+  private hint(lobby: HostLobby): string {
+    const view = lobby.slot(this.viewSlot);
+    if (this.isIssuing || view?.state === 'preparing') return 'PREPARING AN INVITE LINK... (UP TO 5 SEC)';
+    if (view?.state === 'inviting' && !this.copiedSlots.has(view.slot)) return 'PRESS ENTER (OR CLICK) TO COPY THE INVITE LINK';
+    const slots = lobby.slots;
+    if (slots.some((s) => s.state === 'connecting')) return 'CONNECTING TO A PLAYER... (UP TO 15 SEC)';
+    if (slots.some((s) => s.state === 'inviting')) return 'SEND THE LINK TO A FRIEND, THEN PASTE THEIR REPLY HERE (CTRL+V)';
+    const session = lobby.session;
+    const others = session.players.filter((p) => p.id !== session.playerId);
+    if (others.length > 0) {
+      return others.every((p) => p.isReady) ? 'START THE RACE, OR MAKE A NEW INVITE FOR MORE PLAYERS' : 'WAITING FOR ALL PLAYERS TO BE READY';
+    }
+    return 'SELECT "NEW INVITE" TO INVITE A FRIEND';
+  }
+
   private renderMenu(ctx: CanvasRenderingContext2D, ui: LobbyUi, lobby: HostLobby): void {
     const session = lobby.session;
     const others = session.players.filter((p) => p.id !== session.playerId);
@@ -515,20 +583,16 @@ export class HostLobbyScene implements Scene {
     const team = teamOf(this.profile.team);
     const views: MenuItemView[] = items.map((item) => {
       switch (item) {
-        case 'name':
-          return { label: labels.name, isEnabled: true };
+        case 'invite':
+          return { label: this.inviteLabel(lobby), isEnabled: !this.isIssuing };
         case 'team':
           return { label: labels.team, isEnabled: true, value: `${team.carNumber} ${team.abbr}` };
-        case 'ready':
-          return { label: labels.ready, isEnabled: true, value: session.me?.isReady ? 'YES' : 'NO' };
         case 'laps':
           return { label: labels.laps, isEnabled: true, value: String(this.currentLaps(lobby)) };
         case 'slot':
           return { label: labels.slot, isEnabled: true, value: String(this.viewSlot) };
         case 'start':
           return { label: labels.start, isEnabled: canStart };
-        case 'paste':
-          return { label: labels.paste, isEnabled: true };
         default:
           return { label: labels[item], isEnabled: true };
       }
@@ -556,7 +620,7 @@ export class HostLobbyScene implements Scene {
           row.status = 'OPEN';
           break;
         case 'preparing':
-          row.status = 'PREPARING CODE...';
+          row.status = 'PREPARING LINK...';
           row.statusColor = colors.text;
           break;
         case 'inviting':
@@ -599,7 +663,8 @@ export class HostLobbyScene implements Scene {
     const showCode = view?.state === 'inviting' && view.code !== null;
     if (inviteBox) {
       ui.overlay.setVisible(inviteBox, showCode);
-      if (showCode && inviteBox.value !== view.code) inviteBox.value = view.code ?? '';
+      const link = showCode && view.code ? this.inviteLink(view.code) : '';
+      if (showCode && inviteBox.value !== link) inviteBox.value = link;
     }
     if (!view) return;
     const x = codeX + 10;
@@ -613,24 +678,30 @@ export class HostLobbyScene implements Scene {
         drawParagraph(
           ctx,
           [
-            'SELECT "ISSUE INVITE CODE" TO MAKE A CODE FOR THE NEXT OPEN SLOT. YOU CAN ISSUE CODES FOR SEVERAL PLAYERS AT ONCE.',
-            'EACH PLAYER PASTES THEIR CODE AND SENDS A REPLY CODE BACK. PASTE THE REPLY CODES HERE WITH CTRL+V, IN ANY ORDER.',
+            'SELECT "NEW INVITE" TO MAKE AN INVITE LINK FOR THE NEXT OPEN SLOT. YOU CAN MAKE LINKS FOR SEVERAL PLAYERS AT ONCE.',
+            'EACH PLAYER OPENS THEIR LINK AND SENDS A REPLY CODE BACK. PASTE THE REPLY CODES HERE WITH CTRL+V, IN ANY ORDER.',
           ],
           x, y + 28, w, { color: colors.text },
         );
         break;
       case 'preparing':
-        drawText(ctx, `SLOT ${slot}: PREPARING THE INVITE CODE... (UP TO 5 SEC)`, x, y, { color: colors.white });
+        drawText(ctx, `SLOT ${slot}: PREPARING THE INVITE LINK... (UP TO 5 SEC)`, x, y, { color: colors.white });
         break;
       case 'inviting': {
-        drawText(ctx, `SLOT ${slot} INVITE CODE`, x, y, { color: colors.white });
-        drawText(ctx, `EXPIRES IN ${formatRemaining(view.remainingMs ?? 0)}`, codeX + codeW - 10, y, { color: colors.subtext, align: 'right' });
-        ui.button(ctx, { x: buttonX, y: codeY + 30, w: buttonW, h: 26 }, 'COPY', true, () => void this.copyInvite(view));
-        ui.button(ctx, { x: buttonX, y: codeY + 62, w: buttonW, h: 26 }, 'CANCEL', true, () => this.cancelSlot());
-        let ny = codeY + 98;
-        ny += drawParagraph(ctx, netTexts.ipWarning, x, ny, w, { color: colors.subtext }) + 4;
+        const isCopied = this.copiedSlots.has(slot);
+        const item = items[this.selected];
+        if (isCopied) {
+          ui.bigPrompt(ctx, promptRect, [`SLOT ${slot}: INVITE LINK COPIED`, 'SEND IT TO ONE FRIEND. CLICK HERE TO COPY AGAIN.'], colors.hudGreen, () => void this.copyInvite(view), 2);
+        } else {
+          const line1 = item === 'invite' || item === 'slot' ? 'PRESS ENTER (OR CLICK)' : 'CLICK HERE';
+          ui.bigPrompt(ctx, promptRect, [line1, `TO COPY THE INVITE LINK (SLOT ${slot})`], colors.yellow, () => void this.copyInvite(view));
+        }
+        ui.button(ctx, { x: buttonX - buttonW - 10, y: codeY + 66, w: buttonW, h: 26 }, 'COPY', true, () => void this.copyInvite(view));
+        ui.button(ctx, { x: buttonX, y: codeY + 66, w: buttonW, h: 26 }, 'CANCEL', true, () => this.cancelSlot());
+        let ny = codeY + 106;
+        ny += drawParagraph(ctx, netTexts.ipWarningLink, x, ny, w, { color: colors.subtext }) + 2;
         const gather = view.gather?.analysis;
-        if (gather?.isStunUnreachable) ny += drawParagraph(ctx, netTexts.stunUnreachable, x, ny, w, { color: colors.yellow, maxLines: 2 });
+        if (gather?.isStunUnreachable) drawParagraph(ctx, netTexts.stunUnreachable, x, ny, w, { color: colors.yellow, maxLines: 2 });
         else if (gather?.isSymmetricNatSuspected) drawParagraph(ctx, netTexts.symmetricNat, x, ny, w, { color: colors.yellow, maxLines: 2 });
         break;
       }
@@ -651,16 +722,12 @@ export class HostLobbyScene implements Scene {
           view.failure === 'expired'
             ? [netTexts.expired]
             : view.failure === 'gatherFailed'
-              ? ['COULD NOT MAKE AN INVITE CODE. TRY AGAIN.']
+              ? ['COULD NOT MAKE AN INVITE LINK. TRY AGAIN.']
               : connectFailedLines(lobby.diagnosticsOf(slot)?.isSamePublicAddress === true);
         drawParagraph(ctx, lines, x, y + 24, w, { color: colors.text, maxLines: 7 });
+        drawText(ctx, 'ON "SLOT": ENTER = DETAILS, DEL = CLEAR', x, codeY + codeH - 24, { color: colors.midGrey });
         break;
       }
-    }
-    const gather = view.gather?.analysis;
-    const hasWarning = view.state === 'inviting' && (gather?.isStunUnreachable || gather?.isSymmetricNatSuspected);
-    if ((view.state === 'inviting' && !hasWarning) || view.state === 'failed') {
-      drawText(ctx, 'ON "SLOT": ENTER = COPY, DEL = CANCEL', x, codeY + codeH - 24, { color: colors.midGrey });
     }
   }
 }

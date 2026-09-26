@@ -10,3 +10,17 @@ export function nextFreeTeam(current: number, step: number, taken: readonly numb
   }
   return current;
 }
+
+/**
+ * 名前が重なって断られたときに入り直す名前。末尾に 2, 3, … を付ける (8 文字を超えるぶんは元の名前の後ろを削る)。
+ * attempt は 0 から数える。元の名前と同じになる番号は飛ばす
+ */
+export function alternativeName(name: string, attempt: number): string {
+  let n = 2 + attempt;
+  for (;;) {
+    const suffix = String(n);
+    const candidate = name.slice(0, 8 - suffix.length) + suffix;
+    if (candidate !== name) return candidate;
+    n++;
+  }
+}

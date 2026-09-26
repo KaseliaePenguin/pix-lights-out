@@ -6,7 +6,7 @@ import type { NetProfile } from '../net/NetClientSession';
 import type { NetRaceClient } from '../net/NetRaceClient';
 import { netTimings } from '../net/netConfig';
 import type { LinkDiagnostics } from '../net/PeerLink';
-import { checkConnectionCode } from '../shared/net/connectionCode';
+import { checkConnectionCode, extractConnectionCode } from '../shared/net/connectionCode';
 import { copyText, readClipboardText } from '../ui/clipboard';
 import { colors } from '../ui/colors';
 import { drawLobbyList } from '../ui/lobbyList';
@@ -19,7 +19,7 @@ import { teamOf } from '../ui/teams';
 import { drawText } from '../ui/text';
 import { getCourseTrack } from './courseCache';
 import { LobbyUi } from './LobbyUi';
-import { nextFreeTeam } from './lobbyRules';
+import { alternativeName, nextFreeTeam } from './lobbyRules';
 import { MenuScene } from './MenuScene';
 import { moveMenuCursor, wasMenuBackPressed, wasMenuConfirmPressed, wasMenuDownPressed, wasMenuLeftPressed, wasMenuRightPressed, wasMenuUpPressed } from './menuKeys';
 import { MultiplayerScene } from './MultiplayerScene';
@@ -27,7 +27,7 @@ import { NetRaceScene } from './NetRaceScene';
 import { loadNetProfile, saveNetProfile } from './netProfile';
 
 /**
- * paste = 招待コードを待っている、preparing = 返答コードを作っている (最大 5 秒)、waiting = 返答コードを出してホストを待っている、
+ * paste = 招待リンク・コードを待っている、preparing = 返答コードを作っている (最大 5 秒)、waiting = 返答コードを出してホストを待っている、
  * joining = つながって join の返事を待っている、lobby = ロビーにいる、rejected = 名前・チームの重複などで断られた、
  * failed = つながらなかった、closed = ホストとの接続が切れた
  */
@@ -62,10 +62,16 @@ const codeW = 776;
 const codeH = 204;
 const buttonW = 136;
 const buttonX = codeX + codeW - buttonW - 10;
+/** 大きなコピーの案内の枠 */
+const promptRect = { x: codeX + 10, y: codeY + 8, w: codeW - 20, h: 56 };
+/** 名前・チームの重複で断られたとき、自動で変えて入り直す回数の上限 */
+const maxAutoJoinAttempts = 16;
 
 /**
- * ロビー (参加者、network.md「参加者の画面」)。招待コードの貼り付け (どこでも Ctrl+V・ボタン・貼り付け欄) → 返答コードの表示と [コピー]
- * → 「ホストの操作を待っています」→ 接続後は参加者一覧と準備完了。名前・チームの重複で断られたら選び直して入り直す。
+ * ロビー (参加者、network.md「参加者の画面」)。招待リンクで開く (invite に招待コード) か、招待リンク・コードを貼り付ける
+ * (どこでも Ctrl+V・ボタン・貼り付け欄) → 返答コードができたら自動でコピーを試し、できなければ「ENTER でコピー」の大きな案内
+ * → 「ホストの操作を待っています」→ 接続後は参加者一覧。ロビーに入った時点で準備完了にする (外すこともできる)。
+ * 名前・チームは前回の値で入り、重複で断られたら自動で名前に数字を付ける・次のチームに変えて入り直す。
  * session を渡すとそのロビーに戻る (リザルトから)。
  */
 export class GuestLobbyScene implements Scene {
@@ -83,10 +89,21 @@ export class GuestLobbyScene implements Scene {
   private joiningTime = 0;
   private isAwaitingJoin = false;
   private isCheckingCode = false;
+  private isReplyCopied = false;
+  /** 重複で断られて自動で入り直した回数と、名前に数字を付けるときの元の名前 */
+  private autoJoinAttempts = 0;
+  private autoNameAttempts = 0;
+  private autoNameBase = '';
+  /** 自動で変えた名前・チームで入った (保存しない。本人が変えたときだけ保存する) */
+  private isAutoAdjusted = false;
+  /** 準備完了にしたいか (ロビーに入った時点で true)。送って反映を待っている間は isReadySent */
+  private wantsReady = true;
+  private isReadySent = false;
 
   constructor(
     private readonly game: Game,
     session: NetClientSession | null,
+    private readonly initialInvite: string | null = null,
   ) {
     this.session = session;
     this.profile = session ? { ...session.profile } : loadNetProfile();
@@ -109,20 +126,21 @@ export class GuestLobbyScene implements Scene {
     }
   }
 
+  /** 名前はどの段階でもメニューの 2 行目 (入力欄の位置を固定するため) */
   private get items(): readonly GuestItem[] {
     switch (this.phase) {
       case 'paste':
-        return ['name', 'team', 'pasteInvite', 'back'];
+        return ['pasteInvite', 'name', 'team', 'back'];
       case 'preparing':
         return ['back'];
       case 'waiting':
-        return ['name', 'team', 'copyReply', 'retry', 'back'];
+        return ['copyReply', 'name', 'team', 'retry', 'back'];
       case 'joining':
         return ['back'];
       case 'lobby':
-        return ['name', 'team', 'ready', 'leave'];
+        return ['ready', 'name', 'team', 'leave'];
       case 'rejected':
-        return ['name', 'team', 'joinAgain', 'leave'];
+        return ['joinAgain', 'name', 'team', 'leave'];
       case 'failed':
         return ['copyDetails', 'retry', 'back'];
       case 'closed':
@@ -135,22 +153,25 @@ export class GuestLobbyScene implements Scene {
     this.ui = new LobbyUi(this.game, {
       onPaste: (text) => void this.acceptInvite(text),
       onNameCommit: (name) => this.commitName(name),
-      nameRect: { x: menuX + 170, y: menuY + 1, w: 150, h: 22 },
+      nameRect: { x: menuX + 170, y: menuY + menuRowH + 1, w: 150, h: 22 },
     });
     this.ui.showName(this.profile.name);
-    this.replyBox = this.ui.overlay.addCodeBox('reply-code', { x: codeX + 10, y: codeY + 30, w: buttonX - codeX - 20, h: 60 });
+    this.replyBox = this.ui.overlay.addCodeBox('reply-code', { x: codeX + 10, y: codeY + 70, w: buttonX - codeX - 20, h: 36 });
     this.pasteBox = this.ui.overlay.addPasteBox(
       'paste-input',
       { x: codeX + 10, y: codeY + 100, w: codeW - 20, h: 48 },
-      'PASTE THE INVITE CODE HERE (CTRL+V)',
+      'PASTE THE INVITE LINK OR CODE HERE (CTRL+V)',
       (text) => void this.acceptInvite(text),
     );
+    // 走り始める前にコースを作っておく (つながってからの join で使う。約 0.5 秒)
+    getCourseTrack();
     if (this.session) {
       this.attach(this.session);
       this.selected = this.items.indexOf('ready');
+      this.syncReady(this.session);
+    } else if (this.initialInvite) {
+      void this.acceptInvite(this.initialInvite);
     }
-    // 走り始める前にコースを作っておく (つながってからの join で使う。約 0.5 秒)
-    getCourseTrack();
     this.game.resetClock();
   }
 
@@ -200,12 +221,12 @@ export class GuestLobbyScene implements Scene {
     if (!ui) return;
     ui.beginRender();
     const phase = this.phase;
-    drawText(ctx, 'JOIN LOBBY', 12, 12, { scale: 4, color: colors.white });
-    if (phase === 'paste') drawText(ctx, 'CTRL+V ANYWHERE: PASTE THE INVITE CODE', width - 12, 22, { color: colors.subtext, align: 'right' });
+    drawText(ctx, 'JOIN LOBBY', 12, 6, { scale: 3, color: colors.white });
+    const isTrouble = phase === 'rejected' || phase === 'failed' || phase === 'closed';
+    ui.drawHint(ctx, this.hint(phase), isTrouble ? colors.red : colors.yellow);
 
     const items = this.items;
-    const hasName = items.includes('name');
-    ui.overlay.setVisible(ui.nameInput, hasName);
+    ui.overlay.setVisible(ui.nameInput, items.includes('name'));
     this.renderMenu(ctx, ui, items);
     if (phase === 'lobby' && this.session) this.renderList(ctx, this.session);
     else this.renderSteps(ctx, phase);
@@ -217,11 +238,12 @@ export class GuestLobbyScene implements Scene {
 
   private async acceptInvite(text: string): Promise<void> {
     if (this.phase !== 'paste' || this.isCheckingCode) {
-      if (this.phase !== 'paste') this.ui?.toast('YOU ALREADY USED AN INVITE CODE. SELECT "START OVER" TO USE ANOTHER ONE.', colors.text);
+      if (this.phase !== 'paste') this.ui?.toast('YOU ALREADY USED AN INVITE. SELECT "START OVER" TO USE ANOTHER ONE.', colors.text);
       return;
     }
-    // 貼り付けた瞬間に形式・種類・バージョンを確かめる
-    const check = checkConnectionCode(text, 'invite');
+    // 招待リンクでもコードだけでも受け付ける。貼り付けた瞬間に形式・種類・バージョンを確かめる
+    const code = extractConnectionCode(text) ?? text;
+    const check = checkConnectionCode(code, 'invite');
     if (!check.ok) {
       this.game.audio.playSe('ui-error');
       this.ui?.toast(codeErrorText(check.error, 'invite'));
@@ -232,7 +254,7 @@ export class GuestLobbyScene implements Scene {
     this.ui?.clearToast();
     this.game.audio.playSe('ui-confirm');
     try {
-      const r = await GuestConnector.fromInvite(text);
+      const r = await GuestConnector.fromInvite(code);
       if (!this.ui || this.localPhase !== 'preparing') {
         if (r.ok) r.connector.cancel();
         return;
@@ -246,10 +268,17 @@ export class GuestLobbyScene implements Scene {
       const connector = r.connector;
       this.connector = connector;
       this.localPhase = 'waiting';
+      this.isReplyCopied = false;
       this.selected = this.items.indexOf('copyReply');
       connector.onOpen = (transport) => {
         if (this.connector !== connector) return;
         this.joiningTime = 0;
+        this.autoJoinAttempts = 0;
+        this.autoNameAttempts = 0;
+        this.autoNameBase = this.profile.name;
+        this.isAutoAdjusted = false;
+        this.wantsReady = true;
+        this.isReadySent = false;
         const session = new NetClientSession(transport, this.profile, getCourseTrack());
         this.session = session;
         this.isAwaitingJoin = true;
@@ -262,6 +291,8 @@ export class GuestLobbyScene implements Scene {
         const diagnostics = connector.diagnostics();
         this.fail(diagnostics, guestFailureLines(reason, connector.remainingMs <= 0, diagnostics.isSamePublicAddress === true));
       };
+      // コピーできる環境 (ページにフォーカスがあるなど) なら自動でコピーする。できなければ「ENTER でコピー」の案内のまま
+      void this.copyReply(true);
     } catch {
       this.localPhase = 'paste';
       this.game.audio.playSe('ui-error');
@@ -278,6 +309,7 @@ export class GuestLobbyScene implements Scene {
 
   private onSessionChange(session: NetClientSession): void {
     if (session !== this.session) return;
+    if (this.isAwaitingJoin && session.state === 'rejected' && this.tryAutoRejoin(session)) return;
     if (session.state === 'rejected' || (this.isAwaitingJoin && session.rejectReason)) {
       if (this.isAwaitingJoin && session.rejectReason) {
         this.isAwaitingJoin = false;
@@ -295,9 +327,50 @@ export class GuestLobbyScene implements Scene {
     if (this.isAwaitingJoin && session.me && session.me.name === this.profile.name && session.me.team === this.profile.team) {
       this.isAwaitingJoin = false;
       this.ui?.clearToast();
-      saveNetProfile(this.profile);
+      if (this.isAutoAdjusted) {
+        const team = teamOf(this.profile.team);
+        this.ui?.toast(
+          `YOUR NAME OR TEAM WAS TAKEN, SO YOU JOINED AS ${this.profile.name} (${team.carNumber} ${team.abbr}). YOU CAN CHANGE THEM ON THE LEFT.`,
+          colors.text,
+        );
+      } else {
+        saveNetProfile(this.profile);
+      }
     }
     if (session.state === 'closed') this.game.audio.playSe('ui-error');
+    this.syncReady(session);
+  }
+
+  /**
+   * 入るときに名前・チームの重複で断られたら、名前の末尾に数字を付ける・次のチームに変えて入り直す
+   * (選び直してもらう手間をなくす)。入り直したら true
+   */
+  private tryAutoRejoin(session: NetClientSession): boolean {
+    const reason = session.rejectReason;
+    if ((reason !== 'nameTaken' && reason !== 'teamTaken') || this.autoJoinAttempts >= maxAutoJoinAttempts) return false;
+    this.autoJoinAttempts++;
+    // 入る前は他の人のチームが分からないので、次のチームを順に試す
+    this.profile =
+      reason === 'nameTaken'
+        ? { ...this.profile, name: alternativeName(this.autoNameBase, this.autoNameAttempts++) }
+        : { ...this.profile, team: nextFreeTeam(this.profile.team, 1, []) };
+    this.isAutoAdjusted = true;
+    this.ui?.showName(this.profile.name);
+    this.rejoin();
+    return true;
+  }
+
+  /** 準備完了を wantsReady に合わせる (入り直すとホスト側で外れるので、そのたびに送り直す) */
+  private syncReady(session: NetClientSession): void {
+    const me = session.me;
+    if (session.state !== 'lobby' || this.isAwaitingJoin || !me) return;
+    if (me.isReady === this.wantsReady) {
+      this.isReadySent = false;
+      return;
+    }
+    if (this.isReadySent) return;
+    this.isReadySent = true;
+    session.setReady(this.wantsReady);
   }
 
   private onRaceStart(session: NetClientSession, race: NetRaceClient): void {
@@ -319,7 +392,7 @@ export class GuestLobbyScene implements Scene {
     this.game.audio.playSe('ui-error');
   }
 
-  /** 最初 (招待コードの貼り付け) に戻る */
+  /** 最初 (招待の貼り付け) に戻る */
   private startOver(): void {
     this.connector?.cancel();
     this.connector = null;
@@ -329,6 +402,7 @@ export class GuestLobbyScene implements Scene {
       this.session = null;
     }
     this.localPhase = 'paste';
+    this.isReplyCopied = false;
     this.failureLines = [];
     this.failureDiagnostics = null;
     this.selected = this.items.indexOf('pasteInvite');
@@ -414,6 +488,7 @@ export class GuestLobbyScene implements Scene {
       return;
     }
     this.profile = { ...this.profile, name };
+    this.isAutoAdjusted = false;
     this.game.audio.playSe('ui-confirm');
     // ロビーにいるときはすぐ入り直す。断られたあとは JOIN AGAIN で
     if (session?.state === 'lobby') this.rejoin();
@@ -429,6 +504,7 @@ export class GuestLobbyScene implements Scene {
       return;
     }
     this.profile = { ...this.profile, team };
+    this.isAutoAdjusted = false;
     this.game.audio.playSe('ui-cursor');
     if (session?.state === 'lobby') this.rejoin();
     else if (!session) saveNetProfile(this.profile);
@@ -439,13 +515,16 @@ export class GuestLobbyScene implements Scene {
     if (!session) return;
     session.rejectReason = null;
     this.isAwaitingJoin = true;
+    this.isReadySent = false;
     session.join(this.profile);
   }
 
   private toggleReady(): void {
     const session = this.session;
     if (!session || session.state !== 'lobby') return;
-    session.setReady(!(session.me?.isReady ?? false));
+    this.wantsReady = !(session.me?.isReady ?? this.wantsReady);
+    this.isReadySent = false;
+    this.syncReady(session);
     this.game.audio.playSe('ui-confirm');
   }
 
@@ -453,19 +532,22 @@ export class GuestLobbyScene implements Scene {
     const text = await readClipboardText();
     if (text === null || text.trim() === '') {
       this.game.audio.playSe('ui-error');
-      this.ui?.toast('COULD NOT READ THE CLIPBOARD. PRESS CTRL+V, OR PASTE INTO THE BOX.');
+      this.ui?.toast('COULD NOT READ THE CLIPBOARD. PRESS CTRL+V, OR PASTE THE INVITE LINK INTO THE BOX.');
       return;
     }
     await this.acceptInvite(text);
   }
 
-  private async copyReply(): Promise<void> {
+  /** isAuto = 返答コードができた時点で自動で試す (失敗しても知らせず、ENTER でコピーの案内を出したままにする) */
+  private async copyReply(isAuto = false): Promise<void> {
     const code = this.connector?.replyCode;
     if (!code) return;
-    const ok = await copyText(code, this.replyBox);
+    const ok = await copyText(code, isAuto ? null : this.replyBox);
+    if (isAuto && !ok) return;
+    if (ok && this.connector?.replyCode === code) this.isReplyCopied = true;
     this.game.audio.playSe(ok ? 'ui-confirm' : 'ui-error');
     this.ui?.toast(
-      ok ? 'REPLY CODE COPIED. SEND IT TO THE HOST.' : 'COULD NOT COPY. SELECT THE CODE IN THE BOX AND PRESS CTRL+C.',
+      ok ? 'REPLY CODE COPIED. SEND IT BACK TO THE HOST.' : 'COULD NOT COPY. SELECT THE CODE IN THE BOX AND PRESS CTRL+C.',
       ok ? colors.hudGreen : colors.yellow,
     );
   }
@@ -482,6 +564,29 @@ export class GuestLobbyScene implements Scene {
   }
 
   // ---- 描画 ----
+
+  /** 画面の上に出す「いま何をすればよいか」(1 行、64 文字まで) */
+  private hint(phase: GuestPhase): string {
+    switch (phase) {
+      case 'paste':
+        return 'OPEN THE INVITE LINK FROM THE HOST, OR PASTE IT HERE (CTRL+V)';
+      case 'preparing':
+        return 'MAKING YOUR REPLY CODE... (UP TO 5 SEC)';
+      case 'waiting':
+        return this.isReplyCopied ? 'SEND THE REPLY CODE BACK TO THE HOST' : 'PRESS ENTER (OR CLICK) TO COPY THE REPLY CODE';
+      case 'joining':
+        return 'CONNECTED. JOINING THE LOBBY...';
+      case 'lobby':
+        if (this.session && !this.session.isCourseCompatible) return 'DIFFERENT COURSE VERSION. EVERYONE SHOULD RELOAD THE PAGE.';
+        return this.session?.me?.isReady ? 'YOU ARE READY. WAIT FOR THE HOST TO START THE RACE.' : 'SET "READY" TO YES WHEN YOU ARE READY.';
+      case 'rejected':
+        return 'CHANGE YOUR NAME OR TEAM, THEN SELECT "JOIN AGAIN".';
+      case 'failed':
+        return 'NOT CONNECTED. SEE THE GUIDE BELOW.';
+      case 'closed':
+        return 'DISCONNECTED. PRESS ENTER TO GO BACK.';
+    }
+  }
 
   private renderMenu(ctx: CanvasRenderingContext2D, ui: LobbyUi, items: readonly GuestItem[]): void {
     const team = teamOf(this.profile.team);
@@ -520,17 +625,23 @@ export class GuestLobbyScene implements Scene {
   private renderSteps(ctx: CanvasRenderingContext2D, phase: GuestPhase): void {
     drawPanel(ctx, listX, listY, listW, 230);
     const steps = [
-      '1. GET AN INVITE CODE FROM THE HOST',
-      '2. PASTE IT HERE (CTRL+V)',
-      '3. COPY YOUR REPLY CODE AND SEND IT BACK TO THE HOST',
+      '1. OPEN THE INVITE LINK FROM THE HOST (OR PASTE IT HERE)',
+      '2. COPY YOUR REPLY CODE',
+      '3. SEND IT BACK TO THE HOST',
       '4. WAIT UNTIL THE HOST PASTES IT',
     ];
-    const current = phase === 'paste' || phase === 'preparing' ? 1 : phase === 'waiting' ? 2 : 3;
+    const current = phase === 'paste' || phase === 'preparing' ? 0 : phase === 'waiting' ? (this.isReplyCopied ? 2 : 1) : 3;
     let y = listY + 12;
     steps.forEach((s, i) => {
       const color = i === current ? colors.white : i < current ? colors.midGrey : colors.subtext;
       y += drawParagraph(ctx, s, listX + 12, y, listW - 24, { color }) + 8;
     });
+    const connector = this.connector;
+    if (phase === 'waiting' && connector) {
+      const left = Math.ceil(connector.remainingMs / 1000);
+      const waitText = left > 0 ? `WAITING FOR THE HOST (${left} SEC LEFT)` : 'WAITING FOR THE HOST...';
+      drawParagraph(ctx, waitText, listX + 12, listY + 196, listW - 24, { color: colors.cyan });
+    }
   }
 
   private renderCodePanel(ctx: CanvasRenderingContext2D, ui: LobbyUi, phase: GuestPhase): void {
@@ -548,23 +659,26 @@ export class GuestLobbyScene implements Scene {
     const session = this.session;
     switch (phase) {
       case 'paste':
-        drawText(ctx, 'PASTE THE INVITE CODE FROM THE HOST', x, y, { color: colors.white });
-        drawParagraph(ctx, 'PRESS CTRL+V ANYWHERE, SELECT "PASTE INVITE", OR PASTE INTO THE BOX BELOW.', x, y + 28, w, { color: colors.text });
-        drawParagraph(ctx, 'SET YOUR NAME AND TEAM FIRST. NAME: 3-8 LETTERS OR DIGITS.', x, codeY + 160, w, { color: colors.subtext });
+        drawText(ctx, 'PASTE THE INVITE LINK (OR CODE) FROM THE HOST', x, y, { color: colors.white });
+        drawParagraph(ctx, 'OPENING THE LINK DOES THIS FOR YOU. OR PRESS CTRL+V ANYWHERE, SELECT "PASTE INVITE", OR PASTE INTO THE BOX BELOW.', x, y + 28, w, {
+          color: colors.text,
+        });
+        drawParagraph(ctx, 'YOUR NAME AND TEAM CAN BE CHANGED ANY TIME ON THE LEFT.', x, codeY + 160, w, { color: colors.subtext });
         break;
       case 'preparing':
         drawText(ctx, 'PREPARING YOUR REPLY CODE... (UP TO 5 SEC)', x, y, { color: colors.white });
         break;
       case 'waiting': {
         if (!connector) break;
-        drawText(ctx, 'YOUR REPLY CODE', x, y, { color: colors.white });
-        ui.button(ctx, { x: buttonX, y: codeY + 30, w: buttonW, h: 26 }, 'COPY', true, () => void this.copyReply());
-        const left = Math.ceil(connector.remainingMs / 1000);
-        const waitText = left > 0 ? `WAITING FOR THE HOST (${left} SEC LEFT)` : 'WAITING FOR THE HOST...';
-        drawText(ctx, waitText, codeX + codeW - 10, y, { color: colors.cyan, align: 'right' });
-        let ny = codeY + 98;
-        ny += drawParagraph(ctx, 'SEND THIS CODE BACK TO THE HOST.', x, ny, w, { color: colors.text }) + 4;
-        ny += drawParagraph(ctx, netTexts.ipWarning, x, ny, w, { color: colors.subtext }) + 4;
+        const isCursorOnCopy = this.items[this.selected] === 'copyReply';
+        if (this.isReplyCopied) {
+          ui.bigPrompt(ctx, promptRect, ['REPLY CODE COPIED', 'SEND IT BACK TO THE HOST. CLICK HERE TO COPY AGAIN.'], colors.hudGreen, () => void this.copyReply(), 2);
+        } else {
+          ui.bigPrompt(ctx, promptRect, [isCursorOnCopy ? 'PRESS ENTER (OR CLICK)' : 'CLICK HERE', 'TO COPY THE REPLY CODE'], colors.yellow, () => void this.copyReply());
+        }
+        ui.button(ctx, { x: buttonX, y: codeY + 70, w: buttonW, h: 26 }, 'COPY', true, () => void this.copyReply());
+        let ny = codeY + 112;
+        ny += drawParagraph(ctx, netTexts.ipWarning, x, ny, w, { color: colors.subtext }) + 2;
         const gather = connector.gather.analysis;
         if (gather.isStunUnreachable) drawParagraph(ctx, netTexts.stunUnreachable, x, ny, w, { color: colors.yellow, maxLines: 2 });
         else if (gather.isSymmetricNatSuspected) drawParagraph(ctx, netTexts.symmetricNat, x, ny, w, { color: colors.yellow, maxLines: 2 });
@@ -579,8 +693,8 @@ export class GuestLobbyScene implements Scene {
         drawText(ctx, `COURSE 1   LAPS ${laps}`, x, y, { color: colors.white });
         const text = session.isCourseCompatible
           ? session.me?.isReady
-            ? 'YOU ARE READY. WAITING FOR THE HOST TO START THE RACE.'
-            : 'SELECT "READY" WHEN YOU ARE READY. THE HOST STARTS THE RACE WHEN EVERYONE IS READY.'
+            ? 'YOU ARE READY. WAITING FOR THE HOST TO START THE RACE. SET "READY" TO NO IF YOU NEED A MOMENT.'
+            : 'YOU ARE NOT READY. SET "READY" TO YES SO THE HOST CAN START THE RACE.'
           : 'THE HOST HAS A DIFFERENT COURSE VERSION. EVERYONE SHOULD RELOAD THE PAGE.';
         drawParagraph(ctx, text, x, y + 28, w, { color: session.isCourseCompatible ? colors.text : colors.yellow });
         break;

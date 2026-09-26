@@ -6,7 +6,9 @@ import type { OverlayRect } from '../ui/DomOverlay';
 import { drawButton } from '../ui/lobbyList';
 import { drawMenuList } from '../ui/menuList';
 import type { MenuItemView } from '../ui/menuList';
+import { drawFrame } from '../ui/panel';
 import { drawParagraph } from '../ui/paragraph';
+import { drawText } from '../ui/text';
 import { filterPlayerName } from './netProfile';
 
 /** 知らせ (貼り付けの結果など) を出しておく時間 (秒) */
@@ -105,6 +107,20 @@ export class LobbyUi {
   button(ctx: CanvasRenderingContext2D, rect: OverlayRect, label: string, isEnabled: boolean, action: () => void): void {
     drawButton(ctx, rect, label, isEnabled);
     if (isEnabled) this.clicks.add(rect, action);
+  }
+
+  /** 画面の上に、いま何をすればよいかを 1 行で出す */
+  drawHint(ctx: CanvasRenderingContext2D, text: string, color: string = colors.yellow): void {
+    drawText(ctx, text, 12, 34, { color });
+  }
+
+  /** 枠付きの大きな案内 (「PRESS ENTER (OR CLICK) / TO COPY …」)。枠の中をクリックしても action を呼ぶ */
+  bigPrompt(ctx: CanvasRenderingContext2D, rect: OverlayRect, lines: readonly string[], color: string, action: () => void, scale = 3): void {
+    drawFrame(ctx, rect.x, rect.y, rect.w, rect.h, color);
+    const lineH = 8 * scale;
+    const top = rect.y + (rect.h - lines.length * lineH + scale) / 2;
+    lines.forEach((line, i) => drawText(ctx, line, rect.x + rect.w / 2, top + i * lineH, { scale, color, align: 'center' }));
+    this.clicks.add(rect, action);
   }
 
   drawToast(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, maxLines = 2): void {

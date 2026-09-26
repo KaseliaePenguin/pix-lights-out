@@ -8,6 +8,7 @@ import { analyzeCandidates, buildSdp, extractEssentials, maxCodeCandidates, pars
 
 /**
  * 招待コード (`PLO1I.`) と返答コード (`PLO1R.`) のエンコード・デコード (network.md「コードの形式と長さ」)。
+ * 招待コードは招待リンク (`<ページの URL>#join=PLO1I.…`) にして渡す。貼り付けはリンクでもコードだけでも読める。
  *
  * 中身 (多バイトはビッグエンディアン):
  *   プロトコルのバージョン u16 / ロビー ID u32 / 枠番号 u8 / フラグ u8
@@ -263,10 +264,51 @@ type Parsed =
   | { ok: true; header: CodeHeader; bytes: Uint8Array<ArrayBuffer>; bodyEnd: number }
   | { ok: false; error: CodeError; kind: CodeKind | null; theirVersion: number | null };
 
+/** 招待リンクのフラグメントの前置き (`#join=PLO1I.…`)。フラグメントはサーバーに送られない */
+const inviteLinkMark = '#join=';
+
+/** 招待リンク `<ページの URL>#join=PLO1I.…` を作る。pageUrl は origin + pathname (フラグメントが付いていれば除く) */
+export function inviteLinkOf(pageUrl: string, inviteCode: string): string {
+  return `${pageUrl.replace(/#.*$/, '')}${inviteLinkMark}${inviteCode}`;
+}
+
+/** URL のフラグメント (location.hash) から招待コードを取り出す。招待リンクでなければ null */
+export function inviteCodeFromHash(hash: string): string | null {
+  if (!hash.startsWith(inviteLinkMark)) return null;
+  return extractConnectionCode(hash);
+}
+
+/**
+ * 貼り付けた文字 (コードだけ・招待リンク・前後の文や改行を含むもの) から `PLO…` のコードを取り出す。見つからなければ null。
+ * 招待リンクなら `#join=` より後から探す (ページの URL に似た文字があっても取り違えない)。
+ * 空白・改行を除いてつないだもの (チャットの折り返しで切れたコード) と、空白で区切ったもの (後ろに英単語が続くリンク) の
+ * 両方を試し、チェックサムが合うほうを返す
+ */
+export function extractConnectionCode(text: string): string | null {
+  const candidates: string[] = [];
+  const add = (s: string) => {
+    const at = s.lastIndexOf(inviteLinkMark);
+    const m = codePattern.exec(at >= 0 ? s.slice(at + inviteLinkMark.length) : s);
+    if (m && !candidates.includes(m[0])) candidates.push(m[0]);
+  };
+  add(text.replace(ignoredChars, ''));
+  for (const token of text.split(ignoredChars)) add(token);
+  return candidates.find(hasValidChecksum) ?? candidates[0] ?? null;
+}
+
+function hasValidChecksum(code: string): boolean {
+  const m = codePattern.exec(code);
+  const bytes = m ? decodeBase64url(m[3]) : null;
+  if (!bytes || bytes.length < headerBytes + checksumBytes) return false;
+  const end = bytes.length - checksumBytes;
+  return crc16(bytes, end) === ((bytes[end] << 8) | bytes[end + 1]);
+}
+
 function parse(text: string, expectedKind: CodeKind | null): Parsed {
   const fail = (error: CodeError, kind: CodeKind | null = null, theirVersion: number | null = null): Parsed =>
     ({ ok: false, error, kind, theirVersion });
-  const m = codePattern.exec(text.replace(ignoredChars, ''));
+  const code = extractConnectionCode(text);
+  const m = code === null ? null : codePattern.exec(code);
   if (!m) return fail('malformed');
   const kind = m[2] === 'I' ? 'invite' : m[2] === 'R' ? 'reply' : null;
   if (!kind) return fail('malformed');
