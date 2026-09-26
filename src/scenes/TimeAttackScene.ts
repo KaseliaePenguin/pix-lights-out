@@ -312,13 +312,18 @@ export class TimeAttackScene implements Scene {
   private startRun(): void {
     const session = this.session;
     if (!session) return;
+    const wasTuned = this.isRunTuned;
+    this.isRunTuned = tuningStore?.isModified ?? false;
+    if (wasTuned && !this.isRunTuned) {
+      session.replaceRecord(loadRecord(session.track));
+      this.savedGhost = session.record.ghost;
+    }
     session.restart();
     this.marks?.clear();
     this.particles.clear();
     this.messages.clear();
     this.camera.snapTo(session.car.x, session.car.y, session.car.heading);
     this.time = 0;
-    this.isRunTuned = tuningStore?.isModified ?? false;
     // コースの生成などで止まっていた時間をまとめて進めない (カウントダウンが短くならないように)
     this.game.resetClock();
   }

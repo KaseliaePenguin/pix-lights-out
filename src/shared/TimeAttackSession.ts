@@ -95,10 +95,22 @@ export class TimeAttackSession {
     this.car.wear = 0;
     this.lap = new LapTracker(track);
     this.drs = new DrsController(track, 'free');
+    this.record = createEmptyRecord(track);
+    this.replaceRecord(savedRecord);
+    this.restart();
+  }
+
+  /**
+   * 記録を差し替え、このセッションのベストも消す。
+   * 調整した値で走ったあとに既定値へ戻したとき、調整中の記録を基準にし続けないようにする
+   */
+  replaceRecord(savedRecord: TimeAttackRecord | null): void {
+    const track = this.track;
     this.record = isRecordUsable(savedRecord, track) ? cloneRecord(savedRecord) : createEmptyRecord(track);
     if (this.record.ghost && !isGhostCompatible(this.record.ghost, track.id, track.version)) this.record.ghost = null;
-    if (this.record.ghost) this.ghostPlayer = new GhostPlayer(this.record.ghost);
-    this.restart();
+    this.ghostPlayer = this.record.ghost ? new GhostPlayer(this.record.ghost) : null;
+    this.sessionBestLap = null;
+    this.sessionBestSectors.fill(null);
   }
 
   /** 開始位置に戻してカウントダウンからやり直す (ポーズメニューのリスタート) */

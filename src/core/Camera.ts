@@ -43,7 +43,7 @@ export const defaultCameraOptions: Readonly<CameraOptions> = {
 };
 
 /**
- * 北が常に上の追従カメラ。x, y は画面中央のワールド座標 (px)。
+ * 追従カメラ (北が上で固定、または車の向きに合わせて回す)。x, y は画面中央のワールド座標 (px)。
  * 描画には renderX / renderY (揺れを足して 2 px 単位に丸めたもの) を使う。
  */
 export class Camera {

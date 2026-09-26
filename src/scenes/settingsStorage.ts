@@ -14,7 +14,7 @@ export const saveData = new SaveData('pix-lights-out');
 
 export type NameTagMode = 'all' | 'self' | 'off';
 
-/** 走行画面のカメラ: 北が上で固定 / 車の向きに合わせてなめらかに回す / 段階的に回す */
+/** 走行画面のカメラ: 北が上で固定 / 車の向きに合わせてなめらかに回す */
 export type CameraMode = 'rotate' | 'fixed';
 
 export interface Settings {
