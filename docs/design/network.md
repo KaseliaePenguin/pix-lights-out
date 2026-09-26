@@ -279,7 +279,12 @@ PLO1R.<Base64url>   返答コード (Reply)
 
 ## 中継による接続
 
-2026-09-26 のユーザー決定 (案 B) で追加した。返答コードの受け渡しをなくすため、Cloudflare Workers + Durable Objects の中継 (シグナリング) で接続情報を受け渡す。**中継は接続情報 (暗号化済み) を受け渡すだけ**で、ゲームのデータは従来どおり WebRTC DataChannel で直接送る。中継につながらないときは、従来の招待リンク (`#join=`)・返答コードの方式に切り替える (従来の方式はそのまま残す)。画面の切り替え (UI) は未実装 (ロジックと状態だけ公開済み)。
+2026-09-26 のユーザー決定 (案 B) で追加した。返答コードの受け渡しをなくすため、Cloudflare Workers + Durable Objects の中継 (シグナリング) で接続情報を受け渡す。**中継は接続情報 (暗号化済み) を受け渡すだけ**で、ゲームのデータは従来どおり WebRTC DataChannel で直接送る。中継につながらないときは、従来の招待リンク (`#join=`)・返答コードの方式に切り替える (従来の方式はそのまま残す)。画面 (UI):
+
+- ホスト (`HostLobbyScene`): CREATE LOBBY の直後に `openRoom` し、共通リンクができたら自動でコピーを試す (できなければ ENTER / クリックでコピー)。残り時間を表示し、`NEW LINK` (使えるリンクがあるときは 2 回押し) で作り直す。参加者の枠は `KICK` (2 回押し)。1 人用の招待 (`CODE INVITE (BACKUP)`) と返答コードの貼り付け (Ctrl+V) は予備として残す。中継そのものが使えない (`unavailable` で理由が期限切れ・別のタブ以外) ときは「RELAY UNAVAILABLE. USING INVITE CODES.」と知らせ、1 人用の招待を自動で作る
+- 参加者 (`GuestLobbyScene`): `#room=` のリンクを開く (貼り付けてもよい) と `GuestRoomConnector.join` で自動で入る (CONNECTING... / WAITING FOR THE HOST... / CONNECTING TO THE HOST...)。`shouldFallbackToCode` が true なら「ASK THE HOST FOR AN INVITE CODE」と招待コードの貼り付けに切り替える (TRY THE LINK AGAIN も出す)。満員・バージョン違い・WebRTC の失敗は理由を出す。KICK は切断と見分けられないので「DISCONNECTED FROM THE LOBBY. THE CONNECTION WAS LOST, OR THE HOST REMOVED YOU.」
+- `#room=` / `#join=` は読んだらすぐ URL から消す。ページを開いたまま開いたときは受け取れるシーンに渡し、ロビー・レース中は知らせだけ (`main.ts`、`inviteRouter.ts`)
+
 
 ### 遊び方の流れ
 
