@@ -357,6 +357,7 @@ export class RaceSession {
       this.detectDrsLine(rc, dt);
       if (this.phase === 'grid' && !rc.isJumpStart && rc.status === 'racing') this.checkJumpStart(rc);
       if (isStarted && rc.status === 'racing') rc.currentLapTime = this.time - rc.lapStartAt;
+      rc.ghostBlinkTime = rc.isGhostBlinking ? rc.ghostBlinkTime + dt : 0;
     }
     this.updateDrsEligibility();
 

@@ -95,7 +95,6 @@ export class RaceScene implements Scene {
   /** 描く順番 (シャドウ表示 → 通常表示 → 自車) に並べた車と、シャドウ表示にするか。毎フレーム作り直す */
   private readonly drawList: { rc: RaceCar; isShadow: boolean }[] = [];
   /** 車ごと (cars の番号) の点滅の経過秒。点滅していない間は 0 */
-  private blinkTimes: number[] = [];
 
   private sounds: DriveSounds | null = null;
   private slipstreamSound: LoopSound | null = null;
@@ -183,9 +182,6 @@ export class RaceScene implements Scene {
 
     this.positions.update(dt, session.orderNumbers);
     if (session.phase === 'racing' && this.positions.hasChangedNow(player.carNumber)) this.game.audio.playSe('position-change');
-    session.cars.forEach((rc, i) => {
-      this.blinkTimes[i] = rc.isGhostBlinking ? this.blinkTimes[i] + dt : 0;
-    });
 
     followCar(this.camera, player.car, dt);
     this.updateStatusMessages();
@@ -279,7 +275,6 @@ export class RaceScene implements Scene {
     this.particles.clear();
     this.messages.clear();
     this.positions.reset(session.orderNumbers);
-    this.blinkTimes = session.cars.map(() => 0);
     this.finishTimer = -1;
     this.isPlayerFinished = false;
     this.wasGridThrottle = false;
@@ -471,7 +466,7 @@ export class RaceScene implements Scene {
 
   /** シャドウ表示 (ゴースト) にするか。画面を見ている自車から見た判定 (style-guide.md §2) */
   private isShadow(session: RaceSession, player: RaceCar, rc: RaceCar): boolean {
-    if (rc.isGhostBlinking) return Math.floor(this.blinkTimes[rc.index] / blinkInterval) % 2 === 0;
+    if (rc.isGhostBlinking) return Math.floor(rc.ghostBlinkTime / blinkInterval) % 2 === 0;
     if (rc === player) return false;
     // ゴールしたあとは、自車との関係ではなくその車自身の状態で見せる (全車がシャドウになるのを避ける)
     if (player.status !== 'racing') return rc.isGhost;

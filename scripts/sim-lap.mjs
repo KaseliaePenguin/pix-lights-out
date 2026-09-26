@@ -1058,5 +1058,42 @@ console.log('\n== 車同士の接触 (単体) ==');
   check(ghostEnd >= 3 - dt && ghostEnd < 3.2, '操作再開から 3 秒でゴーストが終わる', `${ghostEnd.toFixed(2)} 秒`);
 }
 
+{
+  // 追い抜き: 最後尾の HARD (プレイヤー役を CPU の運転で走らせる) が、遅い CPU の後ろに詰まり続けないか (3 周)
+  console.log('\n== 追い抜き (最後尾の HARD 1 台 vs 相手 7 台、3 周) ==');
+  let easyGain = Infinity;
+  let hardContacts = 0;
+  let spins = 0;
+  for (const [opp, seed] of [['easy', 11], ['easy', 12], ['normal', 13], ['normal', 14]]) {
+    const session = new m.RaceSession({ track, totalLaps: 3, playerCarNumber: 4, cpuCount: 7, difficulty: opp, seed, racingLine: raceLine });
+    const pilot = new m.CpuDriver(raceLine, track, 'hard', new m.Random(seed * 7), 1.08);
+    const env = m.createCpuSurroundings(8);
+    const c = m.createControls();
+    const p = session.player;
+    let contacts = 0;
+    let own = 0;
+    for (let i = 0; i < 60 * 200 && session.phase !== 'finished'; i++) {
+      env.othersCount = 0;
+      for (const rc of session.cars) if (!rc.isPlayer && !session.isGhostPair(rc.index, p.index)) env.others[env.othersCount++] = rc.car;
+      env.canDrive = session.phase !== 'grid';
+      env.timeSinceStart = session.raceTime;
+      pilot.update(p.car, env, dt, c);
+      for (const e of session.step(c, dt)) {
+        if (e.type !== 'contact') continue;
+        contacts++;
+        if (e.carA === 4 || e.carB === 4) own++;
+        if (e.impact >= 187.5) hardContacts++;
+      }
+      for (const rc of session.cars) if (rc.car.spinStarted) spins++;
+    }
+    const r = session.results.find((x) => x.isPlayer);
+    const gain = session.cars.length - (r?.position ?? 99);
+    if (opp === 'easy') easyGain = Math.min(easyGain, gain);
+    console.log(`  vs ${opp.padEnd(6)} (seed ${seed}): グリッド 8 番手 → P${r?.position} / 接触 ${contacts} (自車 ${own})`);
+  }
+  check(easyGain >= 4, 'HARD は EASY の後ろに詰まり続けず、最後尾から 4 つ以上順位を上げる', `最小 ${easyGain}`);
+  check(hardContacts === 0 && spins === 0, '追い抜きで強い接触 (187.5 以上)・スピンが出ない', `強い接触 ${hardContacts}、スピン ${spins}`);
+}
+
 console.log(failures === 0 ? '\nすべての確認が OK' : `\nNG が ${failures} 件`);
 process.exitCode = failures === 0 ? 0 : 1;

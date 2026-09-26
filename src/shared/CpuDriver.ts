@@ -41,12 +41,16 @@ export class CpuDriver {
   readonly mistakeRate: number;
   /** この CPU の目標速度 (レーシングラインの各点) */
   readonly speeds: Float64Array;
+  /** 直線のアクセルの上限 (0〜1) */
+  readonly throttleMax: number;
   /** ラインをずらしている量 (px、右が正。演出・デバッグ用) */
   lineOffset = 0;
   /** 今のコーナーでミスをしている */
   isMistaking = false;
   /** 追い抜きのためにラインをずらしている */
   isOvertaking = false;
+  /** 追突しないようにブレーキを踏んでいる */
+  isAvoiding = false;
 
   private index = -1;
   private overtakeSide = 0;
@@ -54,7 +58,9 @@ export class CpuDriver {
   private overtakeCooldown = 0;
   private stuckTimer = 0;
   private cornerWindowIndex = -1;
+  private followTimer = 0;
   private readonly mistakeShift: number;
+  private readonly brakeEarlyShift: number;
   private readonly cornerWindows: readonly { from: number; to: number }[];
 
   constructor(
@@ -71,6 +77,9 @@ export class CpuDriver {
     this.mistakeRate = d.mistakeRate;
     this.speeds = line.computeSpeeds({ skill: this.skill, tyreGrip });
     this.mistakeShift = Math.max(1, Math.round(params.mistakeDelay / line.spacing));
+    const lack = Math.max(0, 1 - this.skill);
+    this.throttleMax = clamp(1 - params.skillThrottleGain * lack, 0.3, 1);
+    this.brakeEarlyShift = Math.round((params.skillBrakeEarly * lack) / line.spacing);
     this.cornerWindows = track.corners.map((c) => ({ from: c.s0 - params.mistakeWindow, to: c.s1 }));
   }
 
@@ -86,6 +95,7 @@ export class CpuDriver {
     this.isOvertaking = false;
     this.overtakeTimer = 0;
     this.stuckTimer = 0;
+    this.followTimer = 0;
     this.isMistaking = false;
     this.cornerWindowIndex = -1;
   }
@@ -133,16 +143,18 @@ export class CpuDriver {
     // 速度: 少し先の目標速度に合わせる。ミスのときはブレーキ開始が遅れる (手前の点の速度を使う)
     const speeds = this.speeds;
     const here = this.isMistaking ? (this.index - this.mistakeShift + n) % n : this.index;
-    const aheadIndex = (here + Math.max(1, Math.round((v * 0.1) / line.spacing))) % n;
+    // 腕前が低いほど先の目標速度を見る (ブレーキを早めに始める)
+    const aheadIndex = (here + Math.max(1, Math.round((v * 0.1) / line.spacing)) + this.brakeEarlyShift) % n;
     const targetSpeed = Math.min(speeds[aheadIndex], speeds[here] + 30);
     let throttle = 0;
     let brake = 0;
-    if (v < targetSpeed - 1) throttle = 1;
+    if (v < targetSpeed - 1) throttle = this.throttleMax;
     else if (v > targetSpeed + 3) brake = clamp((v - targetSpeed) / 20, 0, 1);
     if (car.uReq > 1.02) throttle = Math.min(throttle, 0.3);
 
     // 追突回避
     const avoid = this.avoidBrake(car, env);
+    this.isAvoiding = avoid > 0;
     if (avoid > 0) {
       throttle = 0;
       brake = Math.max(brake, avoid);
@@ -188,15 +200,25 @@ export class CpuDriver {
       return this.shiftLine(dt);
     }
     const ahead = this.findNear(car, env, 0, cp.overtakeRange, cp.aheadLateral);
-    if (ahead !== null && this.overtakeCooldown <= 0 && this.closingSpeed(car, ahead) > 0) {
-      // 前の車が自分の右にいれば左へ。ずらした先にコースの幅がなければ反対側へ
+    this.followTimer = ahead !== null ? this.followTimer + dt : 0;
+    // 近づいているとき、または後ろにつき続けていて自分のほうが速く走れるときに抜きにいく
+    const isStuckBehind = ahead !== null && this.followTimer >= cp.overtakeFollowTime &&
+      this.speeds[this.index] > ahead.speed + cp.overtakePaceMargin;
+    if (ahead !== null && this.overtakeCooldown <= 0 && (this.closingSpeed(car, ahead) > 0 || isStuckBehind)) {
+      // 前の車が横にずれていれば反対側へ。真後ろなら次のコーナーのイン側へ (ブレーキングで並びやすい)。
+      // ずらした先にコースの幅がなければ反対側へ
       const aheadLateral = (ahead.x - car.x) * Math.cos(car.heading) + (ahead.y - car.y) * Math.sin(car.heading);
       let side = aheadLateral >= 0 ? -1 : 1;
+      if (Math.abs(aheadLateral) < cp.overtakeCenterBand) {
+        const turn = this.upcomingTurn();
+        if (turn !== 0) side = turn;
+      }
       const k = this.index;
       if (Math.abs(this.clampOffset(k, side * cp.overtakeOffset)) < cp.overtakeOffset * 0.5) side = -side;
       this.overtakeSide = side;
       this.overtakeTimer = cp.overtakeTime;
       this.isOvertaking = true;
+      this.followTimer = 0;
     }
     this.shiftLine(dt);
   }
@@ -205,6 +227,16 @@ export class CpuDriver {
     const cp = this.params;
     const goal = this.isOvertaking ? this.overtakeSide * cp.overtakeOffset : 0;
     this.lineOffset = approach(this.lineOffset, goal, cp.overtakeShiftRate * dt);
+  }
+
+  /** 先 (overtakeLookTurn px) のレーシングラインの曲がる向き: +1 = 右、-1 = 左、0 = ほぼ直線 */
+  private upcomingTurn(): number {
+    const line = this.line;
+    const count = Math.round(this.params.overtakeLookTurn / line.spacing);
+    let sum = 0;
+    for (let k = 1; k <= count; k++) sum += line.curvature[(this.index + k) % line.count] * line.spacing;
+    // 合計の曲がる角度 (rad) が小さければ直線とみなす
+    return Math.abs(sum) < 0.2 ? 0 : Math.sign(sum);
   }
 
   /** 追突しそうならブレーキの量 (0〜1) を返す */

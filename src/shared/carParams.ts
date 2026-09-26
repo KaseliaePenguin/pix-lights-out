@@ -353,7 +353,10 @@ export type CpuDifficulty = 'easy' | 'normal' | 'hard';
 
 /** CPU の難易度ごとの値 (game-design.md 9.2 節) */
 export interface CpuDifficultyParams {
-  /** 腕前 (目標速度とブレーキの倍率) */
+  /**
+   * 腕前。コーナーの目標速度とブレーキの倍率 (9.2 節) に加え、直線のアクセルの開け方 (skillThrottleGain) と
+   * ブレーキを始める余裕 (skillBrakeEarly) にも効く
+   */
   skill: number;
   /** コーナーごとにブレーキ開始が遅れる確率 */
   mistakeRate: number;
@@ -367,6 +370,10 @@ export interface CpuParams {
   difficulties: Readonly<Record<CpuDifficulty, CpuDifficultyParams>>;
   /** 個体差: 腕前に ±この値の一様乱数を足す */
   skillSpread: number;
+  /** ★ 直線のアクセルの上限 = 1 − この値 × (1 − 腕前) (腕前 0.9 なら 1 − 0.1 × この値) */
+  skillThrottleGain: number;
+  /** ★ ブレーキを早めに始める距離 (px) = この値 × (1 − 腕前) */
+  skillBrakeEarly: number;
   /** ミスのときにブレーキ開始が遅れる距離 (px) */
   mistakeDelay: number;
   /** ★ ミスを抽選する範囲: コーナーの円弧の手前この距離から */
@@ -378,6 +385,15 @@ export interface CpuParams {
   /** ★ 追い抜きのあと、次の追い抜きを始めるまでの間 (秒) と、ラインをずらす速さ (px/秒) */
   overtakeCooldown: number;
   overtakeShiftRate: number;
+  /**
+   * ★ 前の車に近づいていなくても、この秒数続けて後ろについていて、自分の目標速度のほうが
+   * overtakePaceMargin (px/秒) 以上速ければ抜きにいく (遅い車の後ろに詰まり続けないように)
+   */
+  overtakeFollowTime: number;
+  overtakePaceMargin: number;
+  /** ★ 前の車がこの横幅 (px) 以内の真後ろなら、この距離 (px) 先のコーナーのイン側から抜きにいく */
+  overtakeCenterBand: number;
+  overtakeLookTurn: number;
   /** ★ 「前にいる」とみなす横の幅 (自車の中心線からの距離、px) */
   aheadLateral: number;
   /** 追突回避: 前の車との隙間 (車の長さを除く) がこの距離以内で近づいているときはブレーキ */
@@ -391,21 +407,27 @@ export interface CpuParams {
 
 export const cpuParams: Readonly<CpuParams> = {
   difficulties: {
-    easy: { skill: 0.88, mistakeRate: 0.08, reactionMin: 0.3, reactionMax: 0.4 },
-    normal: { skill: 0.94, mistakeRate: 0.04, reactionMin: 0.2, reactionMax: 0.32 },
-    hard: { skill: 0.98, mistakeRate: 0.015, reactionMin: 0.15, reactionMax: 0.25 },
+    easy: { skill: 0.87, mistakeRate: 0.08, reactionMin: 0.3, reactionMax: 0.4 },
+    normal: { skill: 0.95, mistakeRate: 0.04, reactionMin: 0.2, reactionMax: 0.32 },
+    hard: { skill: 1.0, mistakeRate: 0.015, reactionMin: 0.15, reactionMax: 0.25 },
   },
   skillSpread: 0.01,
+  skillThrottleGain: 1.5,
+  skillBrakeEarly: 400,
   mistakeDelay: 37.5,
   mistakeWindow: 700,
   overtakeRange: 100,
   overtakeOffset: 25,
   overtakeTime: 3,
   overtakeCooldown: 1.5,
-  overtakeShiftRate: 50,
-  aheadLateral: 24,
+  overtakeShiftRate: 100,
+  overtakeFollowTime: 1.0,
+  overtakePaceMargin: 10,
+  overtakeCenterBand: 8,
+  overtakeLookTurn: 600,
+  aheadLateral: 22,
   avoidGap: 50,
-  avoidDecelRatio: 0.6,
+  avoidDecelRatio: 0.8,
   stuckSpeed: 62.5,
   stuckTime: 2,
 };

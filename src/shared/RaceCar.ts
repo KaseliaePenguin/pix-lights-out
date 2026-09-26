@@ -75,6 +75,11 @@ export class RaceCar {
   ghostTimeRemaining = 0;
   /** ピット出口を出たあとのゴーストの残り秒 */
   pitGhostRemaining = 0;
+  /**
+   * 点滅するゴースト (isGhostBlinking) になってからの経過秒。点滅していなければ 0。
+   * 重なっていてゴーストを延長している間も増え続けるので、点滅の位相にそのまま使える
+   */
+  ghostBlinkTime = 0;
 
   // --- RaceSession だけが使う ---
   /** @internal コース復帰の手順の経過 (使っていなければ -1) */
