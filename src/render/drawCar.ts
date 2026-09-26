@@ -1,4 +1,7 @@
 import type { WorldLayer } from '../core/WorldLayer';
+import type { Car } from '../shared/Car';
+
+const drsWindColor = '#ffffff';
 
 /** 車のスプライトの大きさ (ドット)。中身は 10×20、回転の中心はファイルの中心 */
 const spriteSize = 24;
@@ -54,6 +57,23 @@ export function drawCarOnScreen(ctx: CanvasRenderingContext2D, image: HTMLImageE
   ctx.rotate(angle);
   ctx.drawImage(sprite, -size / 2, -size / 2, size, size);
   ctx.restore();
+}
+
+/**
+ * DRS が開いている間、車の後方に風の線 (白、2 本、ちらつかせる)。time はちらつきの位相に使う経過秒、
+ * point は計算用の作業領域
+ */
+export function drawDrsWind(layer: WorldLayer, car: Car, time: number, point: { x: number; y: number }): void {
+  const ctx = layer.ctx;
+  ctx.fillStyle = drsWindColor;
+  const phase = Math.floor(time * 20) % 3;
+  for (const side of [-4, 4]) {
+    for (let k = 0; k < 3; k++) {
+      if (k === phase) continue;
+      car.localToWorld(side, -26 - k * 6, point);
+      ctx.fillRect(layer.dotX(point.x), layer.dotY(point.y), 1, 2);
+    }
+  }
 }
 
 function getFallbackSprite(): HTMLCanvasElement {

@@ -1,18 +1,17 @@
 import { ControlsReader } from '../core/ControlsReader';
-import type { EngineSound } from '../core/EngineSound';
 import { TuningStore } from '../core/TuningStore';
 import type { Game } from '../core/Game';
-import type { LoopSound } from '../core/LoopSound';
 import type { Scene } from '../core/Scene';
 import { Camera, defaultCameraOptions } from '../core/Camera';
 import type { CameraOptions } from '../core/Camera';
 import { WorldLayer } from '../core/WorldLayer';
+import { DriveSounds } from '../entities/DriveSounds';
 import { Particles } from '../entities/Particles';
-import { drawCar, drawCarOnScreen } from '../render/drawCar';
+import { emitWheelEffects } from '../entities/wheelEffects';
+import { drawCar, drawCarOnScreen, drawDrsWind } from '../render/drawCar';
 import { TireMarks } from '../render/TireMarks';
 import { TrackRenderer } from '../render/TrackRenderer';
-import type { WheelIndex } from '../shared/Car';
-import { computeCarSound, createCarSoundParams, wallImpactEffect } from '../shared/carEffects';
+import { wallImpactEffect } from '../shared/carEffects';
 import type { ImpactEffect } from '../shared/carEffects';
 import { defaultCarParams, physicsVersion, raceRules, recordVersionOf, setCarParam } from '../shared/carParams';
 import { createControls } from '../shared/controls';
@@ -20,9 +19,8 @@ import { deserializeGhost, serializeGhost } from '../shared/ghost';
 import type { GhostData } from '../shared/ghost';
 import { TimeAttackSession } from '../shared/TimeAttackSession';
 import type { TimeAttackEvent, TimeAttackRecord } from '../shared/TimeAttackSession';
-import { Track } from '../shared/Track';
+import type { Track } from '../shared/Track';
 import type { Pose } from '../shared/Track';
-import { course1 } from '../shared/tracks/course1';
 import { toKmh } from '../shared/VirtualGearbox';
 import { drawCarStatusPanel } from '../ui/carStatusPanel';
 import { drawCheckpointArrow } from '../ui/checkpointArrow';
@@ -33,21 +31,17 @@ import type { DebugRow } from '../ui/debugPanel';
 import { drawGhostDelta } from '../ui/ghostDelta';
 import { hudMessages } from '../ui/hudMessages';
 import { MessageQueue } from '../ui/MessageQueue';
-import { Minimap } from '../ui/Minimap';
 import type { MinimapCar } from '../ui/Minimap';
 import { drawMessageBand } from '../ui/messageBand';
 import { drawText } from '../ui/text';
 import { drawTimingPanel } from '../ui/timingPanel';
 import { TuningPanel } from '../ui/TuningPanel';
+import { getCourseMinimap, getCourseTrack } from './courseCache';
+import { applyCameraMode, followCar } from './driveCamera';
 import { MenuScene } from './MenuScene';
 import { PauseScene } from './PauseScene';
 import { loadSettings, saveData } from './settingsStorage';
 import type { CameraMode } from './settingsStorage';
-
-/** 起動中に 1 回だけ作る (Track の生成は約 0.5 秒かかるため、リスタートやメニューから戻っても使い回す) */
-let cachedTrack: Track | null = null;
-/** ミニマップもコースの形を 1 回だけ描いて使い回す */
-let cachedMinimap: Minimap | null = null;
 
 /**
  * 開発時の調整パネル (F4) の値。起動中に 1 回だけ作り、シーンを作り直しても同じ値を使う。
@@ -90,23 +84,8 @@ function getTuningStore(): TuningStore {
 
 /** コース復帰直後の点滅: 0.125 秒ごとに通常表示とシャドウ表示を入れ替える (style-guide.md §2) */
 const blinkInterval = 0.125;
-/** 砂利・芝の跳ねを出す最低速度 (px/秒、game-design.md 10.4 節) */
-const dirtMinSpeed = 125;
-const wheels: readonly WheelIndex[] = [0, 1, 2, 3];
-const rearWheels: readonly WheelIndex[] = [2, 3];
 /** カメラを回転するときのワールド層の大きさ (ドット)。画面 400×300 ドットの対角線 500 に余裕を足したもの */
 const rotatedLayerSize = 504;
-/** これより遅い (前進) ときはカメラをゆっくり回す (px/秒) */
-const cameraSlowSpeed = 60;
-
-interface DriveSounds {
-  engine: EngineSound;
-  squeal: LoopSound;
-  grass: LoopSound;
-  gravel: LoopSound;
-  kerb: LoopSound;
-  scrape: LoopSound;
-}
 
 /**
  * タイムアタックの走行画面 (game-design.md 12 章 M1)。
@@ -132,7 +111,6 @@ export class TimeAttackScene implements Scene {
   private readonly controls = createControls();
   private readonly messages = new MessageQueue();
   private readonly particles = new Particles();
-  private readonly soundParams = createCarSoundParams();
   private readonly impact: ImpactEffect = { sound: null, volume: 0, shake: 0, sparks: 0 };
   private readonly ghostPose: Pose = { x: 0, y: 0, heading: 0 };
   private readonly wheel = { x: 0, y: 0 };
@@ -168,23 +146,7 @@ export class TimeAttackScene implements Scene {
 
   /** 設定のカメラの方式を反映する。回転に切り替えたときは、向きをすぐに車に合わせる */
   private applyCameraMode(mode: CameraMode): void {
-    const before = this.camera.rotation;
-    this.camera.rotation = mode === 'fixed' ? 'fixed' : 'smooth';
-    const car = this.session?.car;
-    if (car && before === 'fixed' && this.camera.rotation !== 'fixed') this.camera.snapTo(car.x, car.y, car.heading);
-  }
-
-  /** カメラを 1 フレーム分動かす。回転するときは進行方向 (滑り角を含まない向き) を少し遅れて追う */
-  private updateCamera(dt: number): void {
-    const car = this.session?.car;
-    if (!car) return;
-    if (this.camera.rotation === 'fixed') {
-      this.camera.update(dt, car.x, car.y, car.vx, car.vy);
-      return;
-    }
-    // スピン中・後退中は向きを止め、ごく低速ではゆっくり回す (向きが急に振れて酔わないように)
-    const hold = car.isSpinning || car.isReversing ? 'freeze' : car.sF < cameraSlowSpeed ? 'slow' : 'none';
-    this.camera.updateRotating(dt, car.x, car.y, car.heading, car.sF, hold);
+    applyCameraMode(this.camera, mode, this.session?.car ?? null);
   }
 
   enter(): void {
@@ -221,7 +183,7 @@ export class TimeAttackScene implements Scene {
     this.reader.read(this.controls);
     for (const e of session.step(this.controls, dt)) this.handleEvent(e);
 
-    this.updateCamera(dt);
+    followCar(this.camera, session.car, dt);
     this.updateStatusMessages();
     this.messages.update(dt);
     this.updateEffects(dt);
@@ -253,7 +215,7 @@ export class TimeAttackScene implements Scene {
       if (hasGhost) drawCar(layer, images.getImage('car-base-ghost'), this.ghostPose.x, this.ghostPose.y, this.ghostPose.heading);
       drawCar(layer, playerImage, car.x, car.y, car.drawHeading);
     }
-    if (car.drsOpen) this.drawDrsWind();
+    if (car.drsOpen) drawDrsWind(layer, car, this.time, this.wheel);
     this.particles.render(layer);
     if (isRotated) {
       // 回転する表示: 画面揺れは回転後の画面にかける。車はワールド層ではなく画面に直接描く (回転を 1 回にしてドットの崩れを減らす)
@@ -282,24 +244,14 @@ export class TimeAttackScene implements Scene {
   // ---- 準備 ----
 
   private build(): void {
-    cachedTrack ??= new Track(course1);
-    const track = cachedTrack;
-    cachedMinimap ??= new Minimap(track);
+    const track = getCourseTrack();
     this.renderer = new TrackRenderer(track, this.game.assets);
     // 最初のフレームの引っかかりを減らすため、開始位置のまわりを先に塗っておく
     this.renderer.prepare(track.soloStart.x, track.soloStart.y);
     this.marks = new TireMarks(track);
     this.session = new TimeAttackSession(track, loadRecord(track));
     this.savedGhost = this.session.record.ghost;
-    const audio = this.game.audio;
-    this.sounds = {
-      engine: audio.createEngine('engine-player-loop', 'engine-player-decel-loop'),
-      squeal: audio.createLoop('tire-squeal-loop'),
-      grass: audio.createLoop('offtrack-grass-loop'),
-      gravel: audio.createLoop('offtrack-gravel-loop'),
-      kerb: audio.createLoop('kerb-rumble-loop'),
-      scrape: audio.createLoop('scrape-loop'),
-    };
+    this.sounds = new DriveSounds(this.game.audio);
     this.startRun();
   }
 
@@ -412,15 +364,8 @@ export class TimeAttackScene implements Scene {
     if (!session || !marks) return;
     const car = session.car;
 
-    // タイヤ痕: skidRear で後輪 2 本、skidFront で前輪 2 本 (スピン中は Car が両方立てる)
     marks.update(dt);
-    for (const index of wheels) {
-      const isFront = index < 2;
-      if (isFront ? car.skidFront : car.skidRear) {
-        car.wheelPosition(index, this.wheel);
-        marks.add(this.wheel.x, this.wheel.y);
-      }
-    }
+    emitWheelEffects(car, marks, this.particles, this.wheel);
 
     if (car.lockupStarted) this.game.audio.playSe('tire-lockup');
 
@@ -431,39 +376,7 @@ export class TimeAttackScene implements Scene {
       if (effect.shake > 0) this.camera.shake(effect.shake);
       if (effect.sparks > 0) this.particles.emitSparks(car.wallImpactX, car.wallImpactY, effect.sparks, car.vx, car.vy);
     }
-
-    // 砂利・芝の跳ね (車輪ごと、毎フレームは多すぎるので確率で間引く)
-    if (car.speed >= dirtMinSpeed) {
-      for (const index of wheels) {
-        const surface = car.wheelSurfaces[index];
-        if ((surface === 'grass' || surface === 'gravel') && Math.random() < 0.5) {
-          car.wheelPosition(index, this.wheel);
-          this.particles.emitDirt(surface, this.wheel.x, this.wheel.y, car.vx, car.vy);
-        }
-      }
-    }
-    if (car.isSpinning && Math.random() < 0.6) {
-      car.wheelPosition(rearWheels[Math.random() < 0.5 ? 0 : 1], this.wheel);
-      this.particles.emitSmoke(this.wheel.x, this.wheel.y);
-    }
     this.particles.update(dt);
-  }
-
-  /** DRS が開いている間、車の後方に風の線 (白、2 本、ちらつかせる) */
-  private drawDrsWind(): void {
-    const session = this.session;
-    if (!session) return;
-    const car = session.car;
-    const ctx = this.layer.ctx;
-    ctx.fillStyle = colors.white;
-    const phase = Math.floor(this.time * 20) % 3;
-    for (const side of [-4, 4]) {
-      for (let k = 0; k < 3; k++) {
-        if (k === phase) continue;
-        car.localToWorld(side, -26 - k * 6, this.wheel);
-        ctx.fillRect(this.layer.dotX(this.wheel.x), this.layer.dotY(this.wheel.y), 1, 2);
-      }
-    }
   }
 
   /** コース復帰直後の自車の点滅: 最初の 0.125 秒はシャドウ表示から始める */
@@ -482,24 +395,11 @@ export class TimeAttackScene implements Scene {
     if (!session || !s) return;
     const car = session.car;
     const throttle = car.controlLocked || this.controls.brake > 0 ? 0 : this.controls.throttle;
-    const p = computeCarSound(car, session.gearbox, throttle, this.soundParams);
-    s.engine.update(session.gearbox.rpmRatio, throttle);
-    s.squeal.set(p.squealVolume, p.squealRate);
-    s.grass.set(p.grassVolume, p.surfaceRate);
-    s.gravel.set(p.gravelVolume, p.surfaceRate);
-    s.kerb.set(p.kerbVolume, p.surfaceRate);
-    s.scrape.set(p.scrapeVolume);
+    s.update(car, session.gearbox, throttle);
   }
 
   private stopDriveSounds(): void {
-    const s = this.sounds;
-    if (!s) return;
-    s.engine.stop();
-    s.squeal.stop();
-    s.grass.stop();
-    s.gravel.stop();
-    s.kerb.stop();
-    s.scrape.stop();
+    this.sounds?.stop();
     this.sounds = null;
   }
 
@@ -567,7 +467,7 @@ export class TimeAttackScene implements Scene {
       this.minimapCars.push({ x: this.ghostPose.x, y: this.ghostPose.y, color: teamColors[1], isGhost: true });
     }
     this.minimapCars.push({ x: car.x, y: car.y, color: teamColors[1], isSelf: true });
-    cachedMinimap?.draw(ctx, this.minimapCars);
+    getCourseMinimap().draw(ctx, this.minimapCars);
 
     if (session.phase === 'countdown') drawCountdown(ctx, Math.ceil(session.countdownRemaining - 1e-9));
     if (this.isDebugVisible) drawDebugPanel(ctx, this.debugRows());
