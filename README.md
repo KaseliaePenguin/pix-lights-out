@@ -93,4 +93,14 @@ node scripts/sim-net.mjs     # 通信・オンライン対戦のヘッドレス�
 
 ### 素材について
 
-画像・BGM・効果音は、ローカルで動かした画像・音声の生成 AI で作っています (SDXL + pixel-art-xl LoRA、ACE-Step、Stable Audio Open)。作り方は `docs/setup/comfyui.md` を参照してください。
+画像・BGM・効果音は、ローカルで動かした画像・音声の生成 AI で作り、手を加えています (SDXL + pixel-art-xl LoRA、ACE-Step、Stable Audio Open)。作り方は `docs/setup/comfyui.md` を参照してください。効果音は Stable Audio Open 1.0 で生成しています (**Powered by Stability AI**)。
+
+## ライセンス
+
+| 対象 | ライセンス |
+| --- | --- |
+| ソースコード (`src/`、`signaling/`、`scripts/`、`tools/`、設定ファイル) | [MIT License](LICENSE) |
+| 画像・音・データなどの素材 (`public/assets/`、`public/icons/`、`promo/`)、文書 (`docs/`、この README) | [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) (クレジット表記が必要、商用利用は不可) |
+
+- 素材の生成に使った AI モデルとそのライセンス、Stability AI Community License の表示、利用している外部サービスは [NOTICE.md](NOTICE.md) にまとめています
+- このゲームは個人が趣味で作った非公式のゲームで、Formula One Group、FIA、実在のチームとは関係ありません。ゲーム内のチーム名と塗装は架空のものです
