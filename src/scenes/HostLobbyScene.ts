@@ -9,7 +9,7 @@ import { colors } from '../ui/colors';
 import { drawLobbyList, lobbyListHeight, lobbyRowRect } from '../ui/lobbyList';
 import type { LobbyRowView } from '../ui/lobbyList';
 import type { MenuItemView } from '../ui/menuList';
-import { acceptErrorText, netTexts, rejectText, slotFailureLabel } from '../ui/netTexts';
+import { acceptErrorText, connectFailedLines, netTexts, rejectText, slotFailureLabel } from '../ui/netTexts';
 import { drawPanel } from '../ui/panel';
 import { drawParagraph } from '../ui/paragraph';
 import { teamOf } from '../ui/teams';
@@ -74,6 +74,8 @@ export class HostLobbyScene implements Scene {
   private startWaitRemaining = 0;
   private isAwaitingJoin = false;
   private isCheckingCode = false;
+  /** 枠ごとの前回の状態 (参加・失敗・退出の知らせを出すため)。枠 1〜7 → 状態と参加者名 */
+  private readonly lastSlotStates = new Map<number, string>();
 
   constructor(
     private readonly game: Game,
@@ -188,6 +190,8 @@ export class HostLobbyScene implements Scene {
   }
 
   private attach(lobby: HostLobby): void {
+    // 今の枠の状態を覚えておく (ここからの変化だけを知らせる)
+    this.noticeSlotChanges(lobby);
     lobby.onChange = () => this.onLobbyChange();
     lobby.session.onChange = () => this.onLobbyChange();
     lobby.session.onRaceStart = (race) => this.onRaceStart(lobby, race);
@@ -197,6 +201,7 @@ export class HostLobbyScene implements Scene {
     const lobby = this.lobby;
     if (!lobby) return;
     const session = lobby.session;
+    this.noticeSlotChanges(lobby);
     if (this.isAwaitingJoin) {
       if (session.rejectReason) {
         // 名前・チームの変更を断られた: 表示を今の自分に戻す
@@ -209,6 +214,31 @@ export class HostLobbyScene implements Scene {
       } else if (session.me && session.me.name === this.profile.name && session.me.team === this.profile.team) {
         this.isAwaitingJoin = false;
         saveNetProfile(this.profile);
+      }
+    }
+  }
+
+  /** 枠の状態が変わったら、画面下の知らせ (貼り付けの結果など) を今の状態に書き換える */
+  private noticeSlotChanges(lobby: HostLobby): void {
+    const players = lobby.session.players;
+    for (const view of lobby.slots) {
+      const player = players.find((p) => p.id === view.slot);
+      const key = view.state === 'joined' && player ? `joined:${player.name}` : view.state;
+      const before = this.lastSlotStates.get(view.slot);
+      this.lastSlotStates.set(view.slot, key);
+      // 初めて見る枠 (ロビーに戻ってきたとき) は知らせない
+      if (before === undefined || before === key) continue;
+      const slot = view.slot;
+      if (key.startsWith('joined:') && player) {
+        this.ui?.toast(`SLOT ${slot}: ${player.name} JOINED.`, colors.hudGreen);
+        this.game.audio.playSe('ui-confirm');
+      } else if (view.state === 'joined') {
+        this.ui?.toast(`SLOT ${slot}: CONNECTED. WAITING FOR THE PLAYER TO JOIN...`, colors.text);
+      } else if (view.state === 'failed') {
+        this.ui?.toast(`SLOT ${slot}: FAILED (${slotFailureLabel(view.failure)}). SEE THE SLOT FOR DETAILS.`, colors.red);
+        this.game.audio.playSe('ui-error');
+      } else if (view.state === 'empty' && before.startsWith('joined')) {
+        this.ui?.toast(`SLOT ${slot}: THE PLAYER LEFT.`, colors.text);
       }
     }
   }
@@ -622,7 +652,7 @@ export class HostLobbyScene implements Scene {
             ? [netTexts.expired]
             : view.failure === 'gatherFailed'
               ? ['COULD NOT MAKE AN INVITE CODE. TRY AGAIN.']
-              : netTexts.connectFailedGuide;
+              : connectFailedLines(lobby.diagnosticsOf(slot)?.isSamePublicAddress === true);
         drawParagraph(ctx, lines, x, y + 24, w, { color: colors.text, maxLines: 7 });
         break;
       }

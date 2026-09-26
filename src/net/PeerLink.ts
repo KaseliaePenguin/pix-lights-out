@@ -2,7 +2,7 @@ import type { CodeKind, ConnectionCode } from '../shared/net/connectionCode';
 import { encodeConnectionCode } from '../shared/net/connectionCode';
 import { eventChannelId, eventMaxBytes, stateBufferLimit, stateChannelId, stateMaxBytes } from '../shared/net/protocol';
 import type { CandidateAnalysis, NetRoute } from '../shared/net/sdp';
-import { analyzeCandidates, classifyRoute, parseSdp } from '../shared/net/sdp';
+import { analyzeCandidates, classifyRoute, hasSharedPublicAddress, parseSdp } from '../shared/net/sdp';
 import { readStateType } from '../shared/net/stateCodec';
 import { StateSequencer } from '../shared/net/StateSequencer';
 import { netTimings, stunServers } from './netConfig';
@@ -40,6 +40,11 @@ export interface LinkDiagnostics {
   history: { atMs: number; state: string }[];
   route: NetRoute | null;
   closeReason: LinkCloseReason | null;
+  /**
+   * 双方の srflx に同じ IP がある (同じルーターの内側にいる)。「同じ LAN にいるのに失敗」の案内に使う。
+   * 両方の候補がそろうまでは false (IP アドレスそのものは記録しない)
+   */
+  isSamePublicAddress?: boolean;
 }
 
 export interface PeerLinkConfig {
@@ -86,6 +91,9 @@ export class PeerLink {
   private timeoutTimer: ReturnType<typeof setTimeout> | null = null;
   private isOpenValue = false;
   private isClosed = false;
+  /** 同じ LAN の判定のためだけに持つ候補 (診断の記録には入れない) */
+  private localCandidates: { type: string; address: string }[] | null = null;
+  private remoteCandidates: { type: string; address: string }[] | null = null;
 
   private constructor(role: CodeKind, lobbyId: number, slot: number, config: PeerLinkConfig) {
     this.diagnostics = { role, lobbyId, slot, gather: null, remote: null, history: [], route: null, closeReason: null };
@@ -227,7 +235,10 @@ export class PeerLink {
     const isTimedOut = await this.waitForGathering(config.gatherTimeoutMs);
     const sdp = this.pc.localDescription?.sdp;
     if (!sdp) throw new Error('no local description');
-    const analysis = analyzeCandidates(parseSdp(sdp).candidates);
+    const candidates = parseSdp(sdp).candidates;
+    const analysis = analyzeCandidates(candidates);
+    this.localCandidates = candidates.map((c) => ({ type: c.type, address: c.address }));
+    this.updateSamePublicAddress();
     const gather: GatherReport = { elapsedMs: Math.round(performance.now() - started), isTimedOut, analysis };
     this.diagnostics.gather = gather;
     const code = await encodeConnectionCode({ kind, lobbyId: this.diagnostics.lobbyId, slot: this.diagnostics.slot, sdp });
@@ -266,6 +277,13 @@ export class PeerLink {
       isFullSdp: code.isFullSdp,
       candidateTypes: code.candidates.map((c) => c.type),
     };
+    this.remoteCandidates = code.candidates.map((c) => ({ type: c.type, address: c.address }));
+    this.updateSamePublicAddress();
+  }
+
+  private updateSamePublicAddress(): void {
+    if (!this.localCandidates || !this.remoteCandidates) return;
+    this.diagnostics.isSamePublicAddress = hasSharedPublicAddress(this.localCandidates, this.remoteCandidates);
   }
 
   private startTimeout(ms: number): void {

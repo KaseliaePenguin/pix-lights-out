@@ -5,7 +5,8 @@ import { formatRaceGap } from './raceGap';
 import { teamOf } from './teams';
 import { drawText } from './text';
 
-// 表の列 (px)。数字の列は右揃えの右端、文字の列は左端
+// 表の列 (px)。数字の列は右揃えの右端、文字の列は左端。
+// 差は最大 7 文字 (+1:02.3、+12 LAP でも 7)、タイムは 8 文字 (0:39.058) なので、隣の列との間を 12px 以上あける
 const rowH = 28;
 const colPos = 64;
 const colBand = 76;
@@ -41,10 +42,10 @@ export function drawResultTable(
   nameOf: (r: RaceResult) => string,
   isLongNames = false,
 ): void {
-  const colTime = isLongNames ? colTimeBase + 60 : colTimeBase;
+  const colTime = isLongNames ? colTimeBase + 56 : colTimeBase;
   const colGap = isLongNames ? colGapBase + 40 : colGapBase;
-  const colBest = isLongNames ? colBestBase + 48 : colBestBase;
-  const colStatus = isLongNames ? colStatusBase + 36 : colStatusBase;
+  const colBest = isLongNames ? colBestBase + 40 : colBestBase;
+  const colStatus = isLongNames ? colStatusBase + 32 : colStatusBase;
   let fastestLap: number | null = null;
   for (const r of results) if (r.bestLap !== null && (fastestLap === null || r.bestLap < fastestLap)) fastestLap = r.bestLap;
   const header = { color: colors.subtext };

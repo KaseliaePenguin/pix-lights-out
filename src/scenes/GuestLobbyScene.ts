@@ -259,7 +259,8 @@ export class GuestLobbyScene implements Scene {
       };
       connector.onFail = (reason) => {
         if (this.connector !== connector || this.session) return;
-        this.fail(connector.diagnostics(), guestFailureLines(reason, connector.remainingMs <= 0));
+        const diagnostics = connector.diagnostics();
+        this.fail(diagnostics, guestFailureLines(reason, connector.remainingMs <= 0, diagnostics.isSamePublicAddress === true));
       };
     } catch {
       this.localPhase = 'paste';

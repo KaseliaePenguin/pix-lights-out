@@ -31,6 +31,10 @@ export const netTexts = {
     '3. ONE OF YOU USES ANOTHER LINE, E.G. PHONE TETHERING',
     '4. PLAY ON THE SAME LAN (SAME WI-FI)',
   ],
+  /** 双方の srflx の IP が同じ (同じルーターの内側) なのに失敗した */
+  sameLanFailed:
+    'YOU SEEM TO BE ON THE SAME NETWORK, BUT COULD NOT CONNECT. NETWORKS THAT BLOCK DEVICES FROM TALKING TO EACH OTHER ' +
+    '(E.G. GUEST WI-FI) CANNOT BE USED. SWITCH TO ANOTHER NETWORK.',
   noResponse: 'NO RESPONSE AFTER CONNECTING. RELOAD THE PAGE AND TRY AGAIN.',
   replyTimedOut: 'TIME IS UP. ASK THE HOST FOR A NEW INVITE CODE.',
   expired: 'EXPIRED. ISSUE A NEW INVITE CODE AND SEND IT.',
@@ -85,9 +89,14 @@ export function slotFailureLabel(failure: HostSlotFailure | null): string {
 }
 
 /** 参加者の接続の失敗 */
-export function guestFailureLines(reason: LinkCloseReason, wasWaitingForHost: boolean): readonly string[] {
+export function guestFailureLines(reason: LinkCloseReason, wasWaitingForHost: boolean, isSamePublicAddress: boolean): readonly string[] {
   if (reason === 'timeout' && wasWaitingForHost) return [netTexts.replyTimedOut];
-  return netTexts.connectFailedGuide;
+  return connectFailedLines(isSamePublicAddress);
+}
+
+/** つながらなかったときの案内 (同じ LAN にいるようなら、その案内) */
+export function connectFailedLines(isSamePublicAddress: boolean): readonly string[] {
+  return isSamePublicAddress ? ['COULD NOT CONNECT.', netTexts.sameLanFailed] : netTexts.connectFailedGuide;
 }
 
 /** ホストに参加を断られた理由 */
