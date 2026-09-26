@@ -6,29 +6,32 @@ import type { SoundDef } from './core/AudioManager';
  * 音量の初期値は sound-guide.md 4 章のグループの推奨ゲイン。最終的な値は試聴で決め、この表だけを直す。
  */
 
+// GitHub Pages などサブパス (/<リポジトリ名>/) で配信しても読めるよう、ページからの相対パスにする (vite.config.ts の base)
+const base = import.meta.env.BASE_URL;
+
 const images: Record<string, string> = {
-  'car-base': '/assets/images/car-base.png',
-  'car-base-ghost': '/assets/images/car-base-ghost.png',
-  'tile-asphalt': '/assets/images/tile-asphalt.png',
-  'tile-grass': '/assets/images/tile-grass.png',
-  'tile-gravel': '/assets/images/tile-gravel.png',
-  'tile-pit': '/assets/images/tile-pit.png',
-  'ui-font-5x7': '/assets/ui/ui-font-5x7.png',
-  'ui-lamp-on': '/assets/ui/ui-lamp-on.png',
-  'ui-lamp-off': '/assets/ui/ui-lamp-off.png',
-  'title-bg': '/assets/images/title-bg.png',
-  'title-logo': '/assets/images/title-logo.png',
+  'car-base': `${base}assets/images/car-base.png`,
+  'car-base-ghost': `${base}assets/images/car-base-ghost.png`,
+  'tile-asphalt': `${base}assets/images/tile-asphalt.png`,
+  'tile-grass': `${base}assets/images/tile-grass.png`,
+  'tile-gravel': `${base}assets/images/tile-gravel.png`,
+  'tile-pit': `${base}assets/images/tile-pit.png`,
+  'ui-font-5x7': `${base}assets/ui/ui-font-5x7.png`,
+  'ui-lamp-on': `${base}assets/ui/ui-lamp-on.png`,
+  'ui-lamp-off': `${base}assets/ui/ui-lamp-off.png`,
+  'title-bg': `${base}assets/images/title-bg.png`,
+  'title-logo': `${base}assets/images/title-logo.png`,
 };
 // チームの車 (車番 1〜8): car-team-01 〜 car-team-08 と、そのシャドウ表示 (ゴースト中) car-team-01-ghost 〜
 for (let team = 1; team <= 8; team++) {
   const name = `car-team-${String(team).padStart(2, '0')}`;
-  images[name] = `/assets/images/${name}.png`;
-  images[`${name}-ghost`] = `/assets/images/${name}-ghost.png`;
+  images[name] = `${base}assets/images/${name}.png`;
+  images[`${name}-ghost`] = `${base}assets/images/${name}-ghost.png`;
 }
 
 /** JSON のデータ */
 const data: Record<string, string> = {
-  'title-paths': '/assets/data/title-paths.json',
+  'title-paths': `${base}assets/data/title-paths.json`,
 };
 
 const bgmFiles = ['menu-theme', 'qualifying-theme', 'race-theme', 'result-theme', 'finish-jingle', 'win-jingle'];
@@ -81,8 +84,8 @@ const plannedSeFiles: string[] = [];
 const plannedFiles: string[] = [...plannedBgmFiles, ...plannedSeFiles];
 
 const sounds: Record<string, string> = {};
-for (const name of [...bgmFiles, ...plannedBgmFiles]) sounds[name] = `/assets/sounds/bgm/${name}.ogg`;
-for (const name of [...seFiles, ...plannedSeFiles]) sounds[name] = `/assets/sounds/se/${name}.ogg`;
+for (const name of [...bgmFiles, ...plannedBgmFiles]) sounds[name] = `${base}assets/sounds/bgm/${name}.ogg`;
+for (const name of [...seFiles, ...plannedSeFiles]) sounds[name] = `${base}assets/sounds/se/${name}.ogg`;
 
 export const assetManifest: AssetManifest = { images, sounds, data, optional: plannedFiles };
 
