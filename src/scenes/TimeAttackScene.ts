@@ -471,7 +471,7 @@ export class TimeAttackScene implements Scene {
 
     if (session.phase === 'countdown') drawCountdown(ctx, Math.ceil(session.countdownRemaining - 1e-9));
     if (this.isDebugVisible) drawDebugPanel(ctx, this.debugRows());
-    // 調整パネルで物理の値を変えている間は記録を保存しない (car-physics.md 19.1 節の表記 TUNED)
+    // 調整パネルで物理の値を変えている間は記録を保存しない (car-physics.md 16.1 節の表記 TUNED)
     if (this.isRunTuned) drawText(ctx, 'TUNED', 12, 12, { color: colors.yellow });
     this.tuning?.render(ctx);
   }
