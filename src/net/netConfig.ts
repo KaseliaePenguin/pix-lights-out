@@ -46,7 +46,7 @@ export const netTimings = {
  * 開発時 (npm run dev) は wrangler dev (signaling/ で npm run dev、ポート 8787) を使う。
  * 開発時だけ ?signal=off で中継を使わない (返答コード方式の確認用)、?signal=ws://… で別の中継を使う
  */
-const deployedSignalingUrl = 'wss://pix-lights-out-signal.pix-lights-out-signal.workers.dev';
+const deployedSignalingUrl = 'wss://pix-lights-out-signal.kaseliaepenguin.workers.dev';
 const devSignalingPort = 8787;
 
 /** 中継の URL。使わないときは null */
