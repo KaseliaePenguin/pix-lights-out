@@ -43,7 +43,7 @@ export class PingSession {
   private seq = 0;
   private sentCount = 0;
   private timer: unknown = null;
-  private running = false;
+  private isActive = false;
   private lastHeardAt = 0;
 
   constructor(options: PingSessionOptions) {
@@ -58,7 +58,7 @@ export class PingSession {
   }
 
   get isRunning(): boolean {
-    return this.running;
+    return this.isActive;
   }
 
   /** 往復時間 (ms)。未測定なら null */
@@ -67,14 +67,14 @@ export class PingSession {
   }
 
   start(): void {
-    if (this.running) return;
-    this.running = true;
+    if (this.isActive) return;
+    this.isActive = true;
     this.lastHeardAt = this.clock.now();
     this.tick();
   }
 
   stop(): void {
-    this.running = false;
+    this.isActive = false;
     if (this.timer !== null) this.clock.clearTimeout(this.timer);
     this.timer = null;
   }
@@ -108,7 +108,7 @@ export class PingSession {
 
   private tick(): void {
     this.timer = null;
-    if (!this.running) return;
+    if (!this.isActive) return;
     if (this.timeoutMs > 0 && this.clock.now() - this.lastHeardAt > this.timeoutMs) {
       this.stop();
       this.onTimeout?.();
@@ -119,9 +119,13 @@ export class PingSession {
     this.pendingSeq[this.seq % pendingSize] = this.seq;
     this.pendingAt[this.seq % pendingSize] = sentAt;
     this.sentCount++;
-    this.send(encodePing(this.seq, sentAt));
-    if (!this.running) return;
+    // 送信が例外を投げても止まらないよう、次の ping を先に予約する
     const delay = this.sentCount < this.burstCount ? this.burstIntervalMs : this.intervalMs;
     this.timer = this.clock.setTimeout(() => this.tick(), delay);
+    try {
+      this.send(encodePing(this.seq, sentAt));
+    } catch {
+      // 送れなかった ping は数えない (pong が来ないだけ)
+    }
   }
 }

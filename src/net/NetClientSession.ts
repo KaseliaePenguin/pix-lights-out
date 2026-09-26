@@ -122,8 +122,15 @@ export class NetClientSession {
         break;
       case 'raceStart': {
         if (this.playerId === null || !msg.grid.includes(this.playerId)) return;
+        let race: NetRaceClient;
+        try {
+          race = new NetRaceClient({ transport: this.transport, track: this.track, playerId: this.playerId, start: msg, players: this.players });
+        } catch {
+          // グリッドがコースの枠より多いなど、この端末で始められない raceStart は無視する
+          return;
+        }
         this.settings = msg.settings;
-        this.race = new NetRaceClient({ transport: this.transport, track: this.track, playerId: this.playerId, start: msg, players: this.players });
+        this.race = race;
         // スナップショットが途切れてレース側が接続を閉じたら、セッションも閉じる
         this.race.onAbort = () => this.handleClose('timeout');
         this.state = 'race';

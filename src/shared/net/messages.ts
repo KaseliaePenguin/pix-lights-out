@@ -186,8 +186,13 @@ function isResultEntry(v: unknown): v is ResultEntry {
     && isNumOrNull(v.totalTime) && isNumOrNull(v.bestLap) && isInt(v.lapsCompleted, 0, 999) && isNum(v.penalty);
 }
 
+/** collision の衝撃 (px/秒) の形の上の上限。これを超えるものは壊れた・不正なメッセージ */
+const maxImpulseInMessage = 10000;
+
 function isCollision(v: Obj): boolean {
-  return isPlayerId(v.other) && isNum(v.impulseX) && isNum(v.impulseY) && isNum(v.time) && (v.spin === undefined || isInt(v.spin, -1, 1));
+  // 衝撃の大きさは物理上の上限 (netRaceRules.collisionImpulseMax) より十分大きい値で切る。細かい上限はホストの中継で見る
+  return isPlayerId(v.other) && isNum(v.impulseX) && isNum(v.impulseY) && Math.hypot(v.impulseX, v.impulseY) <= maxImpulseInMessage
+    && isNum(v.time) && (v.spin === undefined || isInt(v.spin, -1, 1));
 }
 
 function parseJson(text: string): Obj | null {
@@ -220,34 +225,34 @@ export function parseClientMessage(text: string): ClientMessage | null {
 export function parseHostMessage(text: string): HostMessage | null {
   const v = parseJson(text);
   if (!v) return null;
-  let ok = false;
+  let isValid = false;
   switch (v.type) {
     case 'welcome':
-      ok = isPlayerId(v.playerId) && isList(v.players, 8, isLobbyPlayer) && isSettings(v.settings);
+      isValid = isPlayerId(v.playerId) && isList(v.players, 8, isLobbyPlayer) && isSettings(v.settings);
       break;
     case 'reject':
-      ok = isOneOf(v.reason, rejectReasons);
+      isValid = isOneOf(v.reason, rejectReasons);
       break;
     case 'lobby':
-      ok = isList(v.players, 8, isLobbyPlayer) && isSettings(v.settings);
+      isValid = isList(v.players, 8, isLobbyPlayer) && isSettings(v.settings);
       break;
     case 'raceStart':
-      ok = isOneOf(v.session, sessions) && isNum(v.startTime) && isSettings(v.settings)
-        && isList(v.grid, 8, isPlayerId) && isInt(v.seed, 0, 0xffffffff);
+      isValid = isOneOf(v.session, sessions) && isNum(v.startTime) && isSettings(v.settings)
+        && isList(v.grid, 8, isPlayerId) && new Set(v.grid).size === v.grid.length && isInt(v.seed, 0, 0xffffffff);
       break;
     case 'raceEvent':
-      ok = isOneOf(v.event, raceEvents) && isPlayerId(v.playerId) && isNum(v.time)
+      isValid = isOneOf(v.event, raceEvents) && isPlayerId(v.playerId) && isNum(v.time)
         && (v.lap === undefined || isInt(v.lap, 0, 999)) && (v.value === undefined || isNum(v.value));
       break;
     case 'result':
-      ok = isOneOf(v.session, sessions) && isList(v.entries, 8, isResultEntry);
+      isValid = isOneOf(v.session, sessions) && isList(v.entries, 8, isResultEntry);
       break;
     case 'collision':
-      ok = isCollision(v);
+      isValid = isCollision(v);
       break;
     case 'hostClosed':
-      ok = true;
+      isValid = true;
       break;
   }
-  return ok ? (v as unknown as HostMessage) : null;
+  return isValid ? (v as unknown as HostMessage) : null;
 }

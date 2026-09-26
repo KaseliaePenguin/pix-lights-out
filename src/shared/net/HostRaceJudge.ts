@@ -3,9 +3,11 @@ import { carParams, raceSessionRules } from '../carParams';
 import type { ContactResult } from '../carContact';
 import { detectContact } from '../carContact';
 import type { LapEvent } from '../LapTracker';
+import { wrapAngle } from '../math';
 import { RaceCar } from '../RaceCar';
 import { buildRaceResults, raceDistanceOf, recordTiming, SessionBests } from '../raceStandings';
-import type { Pose, Track } from '../Track';
+import type { Pose, Track, TrackProjection } from '../Track';
+import { createProjection, SurfaceCode } from '../Track';
 import type { PlayerId, RaceEventKind, RaceEventMessage, ResultEntry } from './messages';
 import type { RaceStartSchedule } from './netRaceRules';
 import { netRaceRules, raceStartSchedule } from './netRaceRules';
@@ -44,8 +46,18 @@ interface HostCarRecord {
   readonly last: CarNetState;
   /** 最後に受け付けた状態の時刻 (送った側のホスト時刻 ms) */
   lastTime: number;
-  /** 最後に状態が届いた時刻 (ホスト時刻 ms)。ありえない移動で捨てたものも数える */
+  /** 最後に状態が届いた時刻 (ホスト時刻 ms)。捨てたものも数える (60 秒のリタイアの判定だけに使う) */
   lastHeardAt: number;
+  /** 最後に状態を受け付けた時刻 (到着したホスト時刻 ms)。3 秒のゴーストの判定に使う */
+  lastAcceptedAt: number;
+  /** 移動量の余裕 (px)。使った分は時間で戻る (1 通ごとの固定の余裕を積み重ねて速く走る不正を防ぐ) */
+  slackPx: number;
+  /** 最後にコース復帰の置き直しを受け付けた状態の時刻 (ms) */
+  lastResetAt: number;
+  /** 参加者が isGhost を申告し続けている始まりの時刻 (ピットレーン外。申告していなければ null) */
+  reportedGhostSince: number | null;
+  /** 申告の isGhost を認めているか (スナップショットに載せる) */
+  isReportedGhostAllowed: boolean;
   hasState: boolean;
   /** 状態が 3 秒届かずゴーストにしている */
   isStale: boolean;
@@ -95,6 +107,11 @@ export class HostRaceJudge {
   private readonly launchAccel: number;
   private readonly tmpPose: Pose = { x: 0, y: 0, heading: 0 };
   private readonly tmpContact: ContactResult = { depth: 0, nx: 0, ny: 0, x: 0, y: 0 };
+  private readonly tmpProjection: TrackProjection = createProjection();
+  private readonly tmpPoint = { x: 0, y: 0 };
+  private readonly params: Readonly<CarParams>;
+  /** collision を中継する 2 台の中心の距離の上限 (px) */
+  private readonly relayDistance: number;
   private leaderFinishAt = 0;
   private finishCount = 0;
 
@@ -108,6 +125,9 @@ export class HostRaceJudge {
     this.lightsOutAt = this.toSession(config.startTime);
     this.maxSpeed = params.vBase * (1 + params.bonusCap) * netRaceRules.speedLimitFactor;
     this.launchAccel = params.accel0 * 1.5;
+    this.params = params;
+    // 当たり判定の外接円の直径 × 係数 (最後に届いた位置の遅れの分の余裕を含める)
+    this.relayDistance = 2 * Math.hypot(params.hitWidth / 2, params.hitLength / 2) * netRaceRules.collisionRelayReachFactor;
     if (config.entries.length > track.gridSlots.length) throw new Error('too many cars for the grid');
     this.cars = config.entries.map((e, slot) => {
       const rc = new RaceCar(e.carNumber, false, slot, slot, track.gridSlots[slot], null, track, this.totalLaps, params);
@@ -126,8 +146,9 @@ export class HostRaceJudge {
       last.y = pose.y;
       last.heading = pose.heading;
       return {
-        playerId: e.playerId, last, lastTime: this.schedule.gridAt, lastHeardAt: config.now, hasState: false,
-        isStale: false, lastCollisionAt: -Infinity, warnings: 0, isStartJudged: false,
+        playerId: e.playerId, last, lastTime: this.schedule.gridAt, lastHeardAt: config.now, lastAcceptedAt: config.now,
+        slackPx: netRaceRules.moveSlackPx, lastResetAt: -Infinity, reportedGhostSince: null, isReportedGhostAllowed: false,
+        hasState: false, isStale: false, lastCollisionAt: -Infinity, warnings: 0, isStartJudged: false,
       };
     });
     this.updateDistances();
@@ -152,42 +173,52 @@ export class HostRaceJudge {
   }
 
   /**
-   * 参加者の carState を反映する。msg.time は参加者が推定したホスト時刻。
-   * 前回からの時間で走れる距離を超える移動 (瞬間移動・速度上限超え) は捨てて 'ignored' を返す
+   * 参加者の carState を反映する。判定に使う時刻は「到着した時刻 − 片道の遅延の推定 (oneWayMs)」を基準にし、
+   * 申告の時刻 (msg.time) がそこから外れていれば丸める (時刻をずらしてタイムを縮める不正を防ぐ)。
+   * 次のものは捨てて 'ignored' を返す: 速度の上限超え、壁の中・壁を横切る移動、前回からの時間で走れる距離を超える移動
+   * (瞬間移動)。コース復帰の置き直しは、間隔と位置 (最後に正常に走っていた地点より後ろ) が正しいときだけ受け付ける
    */
-  applyState(playerId: PlayerId, msg: CarStateMessage, now: number): StateVerdict {
+  applyState(playerId: PlayerId, msg: CarStateMessage, now: number, oneWayMs = 0): StateVerdict {
     const i = this.indexOf.get(playerId);
     if (i === undefined) return 'dropped';
     const rc = this.cars[i];
     const rec = this.records[i];
     if (rc.status === 'retired' || this.phase === 'finished') return 'dropped';
     rec.lastHeardAt = now;
-    const t = Math.min(msg.time, now + netRaceRules.maxStateLeadMs);
+    const ref = now - Math.max(0, oneWayMs);
+    const tol = netRaceRules.stateTimeToleranceMs;
+    const t = Math.max(ref - tol, Math.min(ref + tol, msg.time));
     if (t <= rec.lastTime) return 'dropped';
     const s = msg.car;
     const car = rc.car;
     const dt = (t - rec.lastTime) / 1000;
+    const isLenient = now - rec.lastCollisionAt < netRaceRules.collisionLeniencyMs;
+    const speedLimit = this.maxSpeed * (isLenient ? netRaceRules.collisionLeniencyFactor : 1);
+    const speed = Math.hypot(s.sF, s.sR);
+    if (!(speed <= speedLimit)) return this.ignore(rec, `speed ${speed.toFixed(0)} px/s`);
+    if (this.track.surfaceCodeAt(s.x, s.y) === SurfaceCode.wall) return this.ignore(rec, 'inside a wall');
+    rec.slackPx = Math.min(netRaceRules.moveSlackPx, rec.slackPx + netRaceRules.moveSlackRefillPxPerSec * dt);
     const moved = Math.hypot(s.x - car.x, s.y - car.y);
-    const lenient = now - rec.lastCollisionAt < netRaceRules.collisionLeniencyMs ? netRaceRules.collisionLeniencyFactor : 1;
+    const excess = moved - speedLimit * dt;
     let verdict: StateVerdict = 'accepted';
-    if (moved > this.maxSpeed * lenient * dt + netRaceRules.moveSlackPx) {
-      rc.lap.resetPose(this.tmpPose);
-      if (s.isResetting && Math.hypot(s.x - this.tmpPose.x, s.y - this.tmpPose.y) <= netRaceRules.resetSnapRadius) {
-        verdict = 'reset';
-      } else {
-        rec.warnings++;
-        this.onWarning?.(playerId, `moved ${moved.toFixed(0)} px in ${(dt * 1000).toFixed(0)} ms`);
-        return 'ignored';
-      }
+    if (excess > rec.slackPx) {
+      if (!this.isValidReset(rc, rec, s, t)) return this.ignore(rec, `moved ${moved.toFixed(0)} px in ${(dt * 1000).toFixed(0)} ms`);
+      verdict = 'reset';
+      rec.lastResetAt = t;
+    } else {
+      if (this.crossesWall(car.x, car.y, s.x, s.y)) return this.ignore(rec, 'crossed a wall');
+      rec.slackPx -= Math.max(0, excess);
     }
     copyNetState(s, rec.last, playerId);
+    rec.last.heading = wrapAngle(s.heading);
     rec.lastTime = t;
+    rec.lastAcceptedAt = now;
     rec.hasState = true;
 
     if (verdict === 'reset') {
       this.tmpPose.x = s.x;
       this.tmpPose.y = s.y;
-      this.tmpPose.heading = s.heading;
+      this.tmpPose.heading = rec.last.heading;
       car.placeAt(this.tmpPose);
       rc.lap.time = this.toSession(t);
       for (const e of rc.lap.applyReset(car)) this.handleLapEvent(rc, e);
@@ -196,13 +227,15 @@ export class HostRaceJudge {
       car.prevY = car.y;
       car.x = s.x;
       car.y = s.y;
-      car.heading = s.heading;
+      car.heading = rec.last.heading;
       car.sF = s.sF;
       car.sR = s.sR;
       car.steer = s.steer;
+      car.wheelsOffTrack = this.countWheelsOffTrack(car);
       rc.lap.time = this.toSession(t) - dt;
       for (const e of rc.lap.update(car, dt)) this.handleLapEvent(rc, e);
     }
+    this.judgeReportedGhost(rc, rec, s.isGhost, t);
     this.judgeJumpStart(rc, rec, t);
     return verdict;
   }
@@ -213,7 +246,7 @@ export class HostRaceJudge {
     if (i !== undefined) this.records[i].lastCollisionAt = now;
   }
 
-  /** from の collision を to に中継してよいか (どちらも走っていて、最後の位置が近い) */
+  /** from の collision を to に中継してよいか (どちらも走っていて、最後の位置が実際に接触しうる距離) */
   canRelayCollision(from: PlayerId, to: PlayerId): boolean {
     const a = this.indexOf.get(from);
     const b = this.indexOf.get(to);
@@ -221,7 +254,7 @@ export class HostRaceJudge {
     const ca = this.cars[a];
     const cb = this.cars[b];
     if (ca.status === 'retired' || cb.status === 'retired' || this.records[a].isStale || this.records[b].isStale) return false;
-    return Math.hypot(ca.car.x - cb.car.x, ca.car.y - cb.car.y) <= netRaceRules.collisionRelayDistance;
+    return Math.hypot(ca.car.x - cb.car.x, ca.car.y - cb.car.y) <= this.relayDistance;
   }
 
   /** 接続が切れた参加者の車をリタイアにする (disconnected を送る) */
@@ -245,12 +278,14 @@ export class HostRaceJudge {
       const rec = this.records[i];
       if (rc.status === 'retired') continue;
       const silent = now - rec.lastHeardAt;
-      if (!rec.isStale && silent >= netRaceRules.staleGhostMs) {
+      // ゴーストは受け付けた状態から数える (捨てられる状態だけを送り続けて、止まった障害物として残らないように)
+      const unaccepted = now - rec.lastAcceptedAt;
+      if (!rec.isStale && unaccepted >= netRaceRules.staleGhostMs) {
         rec.isStale = true;
         rec.last.sF = 0;
         rec.last.sR = 0;
         this.push('ghost', rec.playerId, now);
-      } else if (rec.isStale && silent < netRaceRules.staleGhostMs && !this.overlapsAny(i)) {
+      } else if (rec.isStale && unaccepted < netRaceRules.staleGhostMs && !this.overlapsAny(i)) {
         // 戻るときに他車と重なっていたら、重ならなくなるまでゴーストを延ばす (7.10 節)
         rec.isStale = false;
         this.push('unghost', rec.playerId, now);
@@ -276,21 +311,21 @@ export class HostRaceJudge {
       const rec = this.records[i];
       while (out.length <= i) out.push(createCarNetState());
       const o = copyNetState(rec.last, out[i], rec.playerId);
-      const canMove = rec.hasState && !rec.isStale && rc.status !== 'retired';
-      const ahead = canMove ? Math.max(0, Math.min(now - rec.lastTime, netRaceRules.snapshotExtrapolateMaxMs)) / 1000 : 0;
+      const isMoving = rec.hasState && !rec.isStale && rc.status !== 'retired';
+      const ahead = isMoving ? Math.max(0, Math.min(now - rec.lastTime, netRaceRules.snapshotExtrapolateMaxMs)) / 1000 : 0;
       if (ahead > 0) {
         const sin = Math.sin(o.heading);
         const cos = Math.cos(o.heading);
         o.x += (sin * o.sF + cos * o.sR) * ahead;
         o.y += (-cos * o.sF + sin * o.sR) * ahead;
       }
-      if (!canMove) {
+      if (!isMoving) {
         o.sF = 0;
         o.sR = 0;
       }
       o.lap = rc.lap.lap;
       o.checkpoint = rc.lap.nextCheckpoint;
-      o.isGhost = rec.isStale || rc.status !== 'racing' || rec.last.isGhost;
+      o.isGhost = rec.isStale || rc.status !== 'racing' || rec.isReportedGhostAllowed;
     }
     return this.cars.length;
   }
@@ -299,6 +334,58 @@ export class HostRaceJudge {
     for (const e of this.pending) out.push(e);
     this.pending.length = 0;
     return out;
+  }
+
+  private ignore(rec: HostCarRecord, detail: string): StateVerdict {
+    rec.warnings++;
+    this.onWarning?.(rec.playerId, detail);
+    return 'ignored';
+  }
+
+  /**
+   * コース復帰の置き直しとして認めるか: isResetting、前の置き直しから (暗転 + 操作不能 + ゴースト) 以上たっている、
+   * ホストが求めた置き直し先から近い、最後に正常に走っていた地点より前に出ていない
+   */
+  private isValidReset(rc: RaceCar, rec: HostCarRecord, s: CarNetState, t: number): boolean {
+    if (!s.isResetting || t - rec.lastResetAt < netRaceRules.resetMinIntervalMs) return false;
+    rc.lap.resetPose(this.tmpPose);
+    if (Math.hypot(s.x - this.tmpPose.x, s.y - this.tmpPose.y) > netRaceRules.resetSnapRadius) return false;
+    this.track.project(s.x, s.y, -1, this.tmpProjection);
+    return this.track.deltaS(rc.lap.lastValidS, this.tmpProjection.s) <= netRaceRules.resetForwardTolerancePx;
+  }
+
+  /** 前の位置から今の位置までの線分が壁を通るか (インフィールドを横切るショートカットを防ぐ) */
+  private crossesWall(x0: number, y0: number, x1: number, y1: number): boolean {
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const steps = Math.ceil(len / netRaceRules.wallProbeStepPx);
+    for (let k = 1; k < steps; k++) {
+      const u = k / steps;
+      if (this.track.surfaceCodeAt(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u) === SurfaceCode.wall) return true;
+    }
+    return false;
+  }
+
+  /** コース外 (芝生・砂利) にある車輪の数。ホストは車の物理を計算しないので、位置から求める */
+  private countWheelsOffTrack(car: RaceCar['car']): number {
+    let n = 0;
+    for (let k = 0; k < 4; k++) {
+      car.wheelPosition(k as 0 | 1 | 2 | 3, this.tmpPoint);
+      if (this.params.surfaces[this.track.surfaceAt(this.tmpPoint.x, this.tmpPoint.y)].isOffTrack) n++;
+    }
+    return n;
+  }
+
+  /**
+   * 参加者が申告する isGhost (コース復帰後・ピット出口後) は、ピットレーン内かゴール後か、
+   * 申告が続いている時間が上限以内のときだけ認める (ずっとゴーストで走る不正を防ぐ)
+   */
+  private judgeReportedGhost(rc: RaceCar, rec: HostCarRecord, isGhost: boolean, t: number): void {
+    if (!isGhost || rc.lap.isInPitLane) rec.reportedGhostSince = null;
+    else rec.reportedGhostSince ??= t;
+    rec.isReportedGhostAllowed = isGhost && (
+      rc.lap.isInPitLane || rc.status !== 'racing'
+      || (rec.reportedGhostSince !== null && t - rec.reportedGhostSince <= netRaceRules.reportedGhostMaxMs)
+    );
   }
 
   private toSession(hostTime: number): number {

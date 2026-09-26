@@ -79,6 +79,16 @@ export class HostRelay {
     return false;
   }
 
+  /** 残っている接続をすべて閉じる (ロビーを閉じるときの最後の片付け) */
+  closeAllLinks(): void {
+    const links = [...this.links.entries()];
+    this.links.clear();
+    for (const [peerId, link] of links) {
+      link.close();
+      this.onLinkEnd?.(peerId, 'closed');
+    }
+  }
+
   /**
    * Worker を待たずに、開いている全員へ hostClosed を送る (pagehide など、Worker が動く前にページが閉じるとき用)
    */

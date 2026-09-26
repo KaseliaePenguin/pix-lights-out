@@ -74,6 +74,7 @@ export function recordTimingByDistance(rc: RaceCar, track: Track, d0: number, t0
   const L = track.length;
   const lines = track.timingLines;
   const count = lines.length;
+  if (count === 0) return;
   let lap = Math.floor(d0 / L) + 1;
   let i = 0;
   const s0 = d0 - (lap - 1) * L;

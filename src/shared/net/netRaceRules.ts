@@ -1,5 +1,5 @@
 import type { RaceSessionRules } from '../carParams';
-import { raceSessionRules } from '../carParams';
+import { raceRules, raceSessionRules } from '../carParams';
 import { Random } from '../Random';
 
 /**
@@ -24,21 +24,42 @@ export const netRaceRules = {
   hostSilenceMs: 3000,
   /** 受け取った collision は、接触時刻からこの時間を過ぎていれば適用しない */
   collisionMaxAgeMs: 250,
-  /** ★ ホストが collision を中継する条件: 2 台の最後の位置がこの距離 (px) 以内 (離れた車を押す不正を防ぐ) */
-  collisionRelayDistance: 200,
+  /**
+   * ★ ホストが collision を中継する条件: 2 台の最後の位置が「当たり判定の外接円の直径 × この値」以内
+   * (実際に接触しうる距離。離れた車を押す不正を防ぐ)
+   */
+  collisionRelayReachFactor: 2,
+  /**
+   * ★ collision の衝撃 (速度の変化、px/秒) の上限。最高速 (vBase × 1.25 × 1.3 ≈ 850) × (1 + 反発 0.2) 程度。
+   * ホストは超えるものを中継せず、受け取る側も念のためこの大きさに丸める
+   */
+  collisionImpulseMax: 1100,
+  /** ★ スナップショットで受け取る他車の速さの上限 (px/秒)。超えていれば丸める (壊れた値で接触の計算が暴れないように) */
+  snapshotSpeedMax: 1200,
   /** 受信頻度の上限 (1 人あたり 1 秒の窓で数える)。超えた分は捨て、超える状態が続いたら切断する */
   stateRateLimit: 60,
   eventRateLimit: 20,
   rateViolationKickMs: 10 * 1000,
   /** ★ ありえない移動の判定: 速さの上限 = 基本の最高速 × (1 + 上乗せの上限) × この倍率 */
   speedLimitFactor: 1.3,
-  /** ★ 移動量の余裕 (px)。位置の丸め・壁の押し戻しの分 */
+  /** ★ 移動量の余裕 (px) の上限。使った分は moveSlackRefillPxPerSec で戻る (1 通ごとに足すと積み重ねて速く走れるため) */
   moveSlackPx: 30,
+  moveSlackRefillPxPerSec: 30,
+  /** ★ carState の申告の時刻は「到着した時刻 − 片道の遅延」からこの範囲に丸める */
+  stateTimeToleranceMs: 100,
+  /** ★ 前の位置から今の位置までの線分が壁を通らないかを調べる間隔 (px) */
+  wallProbeStepPx: 8,
+  /** ★ 参加者が申告するゴースト (コース復帰後・ピット出口後) を認める連続時間の上限 (ピットレーン内は別) */
+  reportedGhostMaxMs: 8000,
   /** ★ 直前に接触があった車は、この時間だけ速さの上限をこの倍率に緩める */
   collisionLeniencyMs: 1000,
   collisionLeniencyFactor: 2,
   /** ★ コース復帰の置き直しとして受け付ける距離 (ホストの判定した置き直し先からの px) */
-  resetSnapRadius: 400,
+  resetSnapRadius: 300,
+  /** ★ 置き直し先が、ホストの「最後に正常に走っていた地点」より前に出てよい距離 (px) */
+  resetForwardTolerancePx: 20,
+  /** 置き直しの間隔の下限 = 暗転 + 操作不能 + 復帰後のゴースト (その間は次の復帰を使えないため) */
+  resetMinIntervalMs: (raceRules.resetFadeTime + raceRules.resetLockTime + raceRules.resetGhostTime) * 1000,
   /** ★ carState の時刻は、ホストの今の時刻よりこれ以上先なら今の時刻に丸める (時刻を先へずらす不正を防ぐ) */
   maxStateLeadMs: 100,
   /** ★ スナップショットで、状態の時刻からスナップショットの時刻まで位置を進める上限 */

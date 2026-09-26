@@ -522,8 +522,8 @@ export class NetRaceClient {
       const car = rc.car;
       // 近くの車は、最新の状態から今の位置を予測する (当たり判定がずれないように)
       remote.track.predict(hostNow, netRaceRules.predictMaxMs, pose);
-      const near = Math.hypot(pose.x - self.x, pose.y - self.y) <= netRaceRules.predictRadius;
-      if (!near) remote.track.interpolate(renderAt, netRaceRules.predictMaxMs, pose);
+      const isNear = Math.hypot(pose.x - self.x, pose.y - self.y) <= netRaceRules.predictRadius;
+      if (!isNear) remote.track.interpolate(renderAt, netRaceRules.predictMaxMs, pose);
       car.prevX = car.x;
       car.prevY = car.y;
       car.x = pose.x;
@@ -552,8 +552,8 @@ export class NetRaceClient {
       const other = this.cars[i];
       if (this.isCarGhost(other) || isLappedPair(this.track, self, other, this.rules)) continue;
       if (!detectContact(self.car, other.car, this.tmpContact)) continue;
-      const cooled = hostNow - remote.lastImpactAt >= cooldownMs;
-      const o = resolveContact(self.car, other.car, this.tmpContact, cooled, false, this.outcome);
+      const isCooledDown = hostNow - remote.lastImpactAt >= cooldownMs;
+      const o = resolveContact(self.car, other.car, this.tmpContact, isCooledDown, false, this.outcome);
       self.car.pushOutOfWalls();
       if (o.impact <= 0) continue;
       remote.lastImpactAt = hostNow;
@@ -588,7 +588,11 @@ export class NetRaceClient {
       }
       if (this.isCarGhost(self) || self.status !== 'racing') continue;
       const car = self.car;
-      car.applyContactVelocity(car.vx + msg.impulseX, car.vy + msg.impulseY);
+      // ホストも上限を超えるものは中継しないが、念のため物理的にありえる大きさに丸める
+      const magnitude = Math.hypot(msg.impulseX, msg.impulseY);
+      if (!Number.isFinite(magnitude)) continue;
+      const scale = magnitude > netRaceRules.collisionImpulseMax ? netRaceRules.collisionImpulseMax / magnitude : 1;
+      car.applyContactVelocity(car.vx + msg.impulseX * scale, car.vy + msg.impulseY * scale);
       if (msg.spin) car.startContactSpin(msg.spin);
       remote.lastImpactAt = msg.time;
       this.stats.collisionsApplied++;
@@ -605,17 +609,17 @@ export class NetRaceClient {
 
   private updateSlipstream(isStarted: boolean, dt: number): void {
     const m = this.player;
-    let active = false;
+    let isActive = false;
     if (isStarted && m.status !== 'retired') {
       for (const l of this.cars) {
         if (l === m || !this.isOnTrack(l) || this.isGhostPair(m.index, l.index)) continue;
         if (isInSlipstream(m.car, l.car)) {
-          active = true;
+          isActive = true;
           break;
         }
       }
     }
-    m.car.fSlip = approach(m.car.fSlip, active ? 1 : 0, m.car.params.slipRate * dt);
+    m.car.fSlip = approach(m.car.fSlip, isActive ? 1 : 0, m.car.params.slipRate * dt);
   }
 
   /** 自車が DRS 検知ラインを通ったら、前の車が 1.000 秒以内に通っていれば、その周の区間で使える (7.6 節) */
@@ -627,20 +631,20 @@ export class NetRaceClient {
     rc.prevS = s;
     if (!(moved > 0 && moved < 60 && before > 0 && before <= moved)) return;
     const at = this.time - dt + (before / moved) * dt;
-    let eligible = false;
+    let isEligible = false;
     if (this.phase === 'racing' && rc.status === 'racing' && rc.lap.lap >= this.rules.drsMinLap) {
       for (const o of this.cars) {
         if (o === rc || o.status === 'retired' || o.lap.isInPitLane) continue;
         const t = o.lastDrsDetectionAt;
         if (t <= at && at - t <= this.rules.drsGapThreshold) {
-          eligible = true;
+          isEligible = true;
           break;
         }
       }
     }
     rc.lastDrsDetectionAt = at;
-    rc.isDrsEligible = eligible;
-    if (eligible) this.events.push({ type: 'drsAvailable', carNumber: rc.carNumber });
+    rc.isDrsEligible = isEligible;
+    if (isEligible) this.events.push({ type: 'drsAvailable', carNumber: rc.carNumber });
   }
 
   /** 他車が DRS 検知ラインを通った時刻を、スナップショットの進行距離から求める */

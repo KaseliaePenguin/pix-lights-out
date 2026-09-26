@@ -1,3 +1,4 @@
+import { netTimings } from '../net/netConfig';
 import type { HostTransport, PeerLeaveReason } from '../net/Transport';
 import { HostRaceJudge } from '../shared/net/HostRaceJudge';
 import type { HostRaceEntry } from '../shared/net/HostRaceJudge';
@@ -28,8 +29,8 @@ export interface RaceHostOptions {
 
 export type RaceHostPhase = 'lobby' | 'race';
 
-/** ok = 始めた、notReady = 準備完了でない人がいる、noPlayers = 誰もいない、inRace = レース中 */
-export type StartRaceResult = 'ok' | 'notReady' | 'noPlayers' | 'inRace';
+/** ok = 始めた、notReady = 準備完了でない人がいる、noPlayers = 誰もいない、inRace = レース中、closed = ロビーを閉じた */
+export type StartRaceResult = 'ok' | 'notReady' | 'noPlayers' | 'inRace' | 'closed';
 
 interface HostPlayer {
   id: PlayerId;
@@ -44,6 +45,8 @@ interface HostPeer {
   stateLimit: RateLimiter;
   eventLimit: RateLimiter;
   isKicking: boolean;
+  /** join を一度でも送ってきたか (DataChannel を開いたまま join しない相手は 5 秒で切断する) */
+  hasSentJoin: boolean;
 }
 
 /** 周回数の範囲 (ホスト設定。game-design.md の 3 / 5 周を含む) */
@@ -195,11 +198,17 @@ export class RaceHost {
 
   private handlePeerJoin(id: PlayerId): void {
     if (this.peers.has(id)) return;
-    this.peers.set(id, {
+    const peer: HostPeer = {
       stateLimit: new RateLimiter(netRaceRules.stateRateLimit),
       eventLimit: new RateLimiter(netRaceRules.eventRateLimit),
       isKicking: false,
-    });
+      hasSentJoin: false,
+    };
+    this.peers.set(id, peer);
+    // つながったのに join が来ない相手に枠を占有させない
+    this.clock.setTimeout(() => {
+      if (!this.isClosed && this.peers.get(id) === peer && !peer.hasSentJoin && !peer.isKicking) this.kick(id);
+    }, netTimings.handshakeTimeoutMs);
   }
 
   private handlePeerLeave(id: PlayerId, _reason: PeerLeaveReason): void {
@@ -219,6 +228,7 @@ export class RaceHost {
     }
     switch (msg.type) {
       case 'join':
+        peer.hasSentJoin = true;
         this.handleJoin(id, msg);
         break;
       case 'ready': {
@@ -270,8 +280,10 @@ export class RaceHost {
     if (!judge || this.phase !== 'race') return;
     // 時刻が今からかけ離れたもの (古すぎる・未来) は中継しない
     if (msg.time < now - netRaceRules.collisionMaxAgeMs * 4 || msg.time > now + netRaceRules.maxStateLeadMs) return;
+    // 衝撃が物理的にありえない大きさなら中継しない (受け取った側の車が NaN・暴走になるのを防ぐ)
+    if (!(Math.hypot(msg.impulseX, msg.impulseY) <= netRaceRules.collisionImpulseMax)) return;
     if (!judge.canRelayCollision(from, msg.other)) return;
-    judge.noteCollision(from, now);
+    // 速さの判定の緩和とフライングの免除は、押された側 (受け取る側) だけ。送った側が自分に付けられないように
     judge.noteCollision(msg.other, now);
     const relayed: CollisionMessage = { type: 'collision', other: from, impulseX: msg.impulseX, impulseY: msg.impulseY, time: msg.time };
     if (msg.spin) relayed.spin = msg.spin;
@@ -291,7 +303,10 @@ export class RaceHost {
       this.kick(id);
       return;
     }
-    if (this.phase === 'race' && this.judge) this.judge.applyState(id, this.carMsg, now);
+    if (this.phase === 'race' && this.judge) {
+      const rtt = this.transport.peerStats(id)?.rttMs;
+      this.judge.applyState(id, this.carMsg, now, rtt == null ? 0 : rtt / 2);
+    }
   }
 
   private kick(id: PlayerId): void {

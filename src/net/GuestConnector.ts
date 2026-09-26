@@ -41,8 +41,13 @@ export class GuestConnector {
   static async fromInvite(text: string): Promise<GuestInviteResult> {
     const decoded = await decodeConnectionCode(text, 'invite');
     if (!decoded.ok) return { ok: false, error: decoded.error, theirVersion: decoded.theirVersion };
-    const offer = await PeerLink.createReply(decoded.code);
-    return { ok: true, connector: new GuestConnector(offer.link, offer.code, offer.gather) };
+    // チェックサムは合っていても SDP が壊れている (全文形式など) と、ブラウザが setRemoteDescription で拒否する
+    try {
+      const offer = await PeerLink.createReply(decoded.code);
+      return { ok: true, connector: new GuestConnector(offer.link, offer.code, offer.gather) };
+    } catch {
+      return { ok: false, error: 'malformed', theirVersion: decoded.code.protocolVersion };
+    }
   }
 
   /** ホストが返答コードを貼り付けるまでの残り (ms、「ホストの操作を待っています (残り 120 秒)」) */

@@ -32,6 +32,11 @@ export { CpuDriver, createCpuSurroundings } from './src/shared/CpuDriver';
 export { carParams, raceRules } from './src/shared/carParams';
 export { createControls } from './src/shared/controls';
 export { Random } from './src/shared/Random';
+export { HostRaceJudge } from './src/shared/net/HostRaceJudge';
+export { netRaceRules } from './src/shared/net/netRaceRules';
+export { PingSession } from './src/shared/net/PingSession';
+export { recordTimingByDistance } from './src/shared/raceStandings';
+export { SurfaceCode } from './src/shared/Track';
 `;
 const bundle = await build({
   stdin: { contents: entry, resolveDir: root, loader: 'ts' },
@@ -776,6 +781,238 @@ console.log('\n== オンラインの決勝: レース中にホストが閉じる
   for (let steps = 0; steps < 30; steps++) driveStep(w);
   check(w.players.every((p) => p.session.race.phase === 'aborted' && p.session.race.abortReason === 'hostClosed' && hasEvent(p, (e) => e.type === 'connectionLost')),
     '全員が hostClosed を受けてレースを止める', `${(w.clock.now() - closedAt).toFixed(0)} ms 以内`);
+}
+
+console.log('\n== 不正対策の再発確認 (HostRaceJudge を直接) ==');
+{
+  const maxSpeed = m.carParams.vBase * (1 + m.carParams.bonusCap) * m.netRaceRules.speedLimitFactor;
+  const startTime = 1_726_000_100_000;
+  const newJudge = (laps = 3) => new m.HostRaceJudge({ track, totalLaps: laps, entries: [{ playerId: 1, carNumber: 1 }], startTime, seed: 1, now: startTime - 8000 });
+  const state = (time, pose, extra = {}) => {
+    const car = m.createCarNetState(1);
+    Object.assign(car, { x: pose.x, y: pose.y, heading: pose.heading, sF: 400 }, extra);
+    return { seq: 0, time, car };
+  };
+  const g0 = track.project(track.gridSlots[0].x, track.gridSlots[0].y, -1);
+  const lateral0 = g0.lateral;
+  const poseAt = (s, lat = lateral0) => track.poseAt(((s % track.length) + track.length) % track.length, lat);
+
+  // H1: 時刻を 0.001 ms ずつしか進めずに 1 周走る → 判定の時刻は到着時刻が基準なので、ラップは実際の時間になる
+  {
+    const judge = newJudge(1);
+    const events = [];
+    let now = startTime + 1000;
+    let s = g0.s;
+    let fakeTime = now;
+    for (let k = 0; k < 60 * 45; k++) {
+      now += 1000 / 60;
+      s += 500 / 60;
+      fakeTime += 0.001;
+      judge.applyState(1, state(fakeTime, poseAt(s, 0)), now);
+      events.push(...judge.update(now));
+      if (judge.results) break;
+    }
+    const lap = events.find((e) => e.event === 'lap');
+    const expected = track.length / 500;
+    check(lap !== undefined && Math.abs(lap.value - expected) < 1, 'H1: 申告の時刻をずらしてもラップタイムは縮まない', `${lap?.value?.toFixed(3)} 秒 (目安 ${expected.toFixed(3)})`);
+  }
+
+  // H1: 1 通ごとに「最高速 + 25 px」ずつ進める → 余裕は時間で戻る分しか使えない
+  {
+    const judge = newJudge();
+    let now = startTime + 1000;
+    judge.applyState(1, state(now, track.gridSlots[0]), now);
+    let s = g0.s;
+    const t0 = now;
+    for (let k = 0; k < 60 * 5; k++) {
+      now += 1000 / 60;
+      s += maxSpeed / 60 + 25;
+      judge.applyState(1, state(now, poseAt(s), { sF: maxSpeed * 0.99 }), now);
+    }
+    const rc = judge.carOf(1);
+    const progressed = track.deltaS(g0.s, rc.lap.projection.s);
+    const speed = progressed / ((now - t0) / 1000);
+    check(speed <= maxSpeed * 1.02 + m.netRaceRules.moveSlackRefillPxPerSec && judge.warningsOf(1) > 0,
+      'H1: 1 通ごとの余裕を積み重ねても最高速を超えて進めない', `${speed.toFixed(0)} px/秒 (上限 ${maxSpeed.toFixed(0)})`);
+  }
+
+  // H4・M1・M4・M5
+  {
+    const judge = newJudge();
+    let now = startTime + 1000;
+    let s = g0.s;
+    judge.applyState(1, state(now, track.gridSlots[0]), now);
+    const drive = (seconds, speed = 500) => {
+      for (let k = 0; k < 60 * seconds; k++) {
+        now += 1000 / 60;
+        s += speed / 60;
+        judge.applyState(1, state(now, poseAt(s)), now);
+      }
+    };
+    drive(10);
+    const rc = judge.carOf(1);
+    // H4: 前へ 250 px の「置き直し」を繰り返す → 捨てる
+    const before = rc.lap.projection.s;
+    let resetForward = 0;
+    for (let k = 0; k < 10; k++) {
+      now += 1000 / 30;
+      if (judge.applyState(1, state(now, poseAt(s + 250 * (k + 1)), { isResetting: true }), now) === 'reset') resetForward++;
+    }
+    check(resetForward === 0 && Math.abs(track.deltaS(before, rc.lap.projection.s)) < 1, 'H4: 前へ進む置き直しは受け付けない', `受け付け ${resetForward} 回`);
+    // 正しい置き直し (ホストの置き直し先へ後ろに跳ぶ) は受け付けるが、間隔の下限 (4.8 秒) 以内の 2 回目は受け付けない
+    drive(1);
+    const tryReset = () => {
+      const pose = rc.lap.resetPose();
+      now += 1000 / 30;
+      const verdict = judge.applyState(1, state(now, pose, { isResetting: true, sF: 0 }), now);
+      if (verdict === 'reset') s = track.project(pose.x, pose.y, -1).s;
+      return verdict;
+    };
+    const first = tryReset();
+    drive(2);
+    const second = tryReset();
+    drive(3);
+    const third = tryReset();
+    check(first === 'reset' && second === 'ignored' && third === 'reset', 'H4: 後ろへの置き直しは受け付け、4.8 秒以内の 2 回目は捨てる', `${first} / ${second} / ${third}`);
+    drive(6);
+
+    // M1: 壊れた速さは捨て、向きは -π〜π に直してから配る
+    now += 1000 / 30;
+    const huge = judge.applyState(1, state(now, poseAt(s), { sF: 3e38 }), now);
+    now += 1000 / 30;
+    s += 500 / 30;
+    judge.applyState(1, state(now, poseAt(s), { heading: poseAt(s).heading + 200 * Math.PI }), now);
+    const snap = [];
+    judge.writeSnapshot(snap, now);
+    check(huge === 'ignored' && Math.abs(snap[0].heading) <= Math.PI && Number.isFinite(snap[0].sF), 'M1: 速さ 3e38 は捨て、向きは直して配る');
+    // M1: ゴーストの申告は上限 (8 秒) まで
+    let ghostAt5 = false;
+    for (let k = 0; k < 60 * 10; k++) {
+      now += 1000 / 60;
+      s += 500 / 60;
+      judge.applyState(1, state(now, poseAt(s), { isGhost: true }), now);
+      if (k === 60 * 5) {
+        judge.writeSnapshot(snap, now);
+        ghostAt5 = snap[0].isGhost;
+      }
+    }
+    judge.writeSnapshot(snap, now);
+    check(ghostAt5 && !snap[0].isGhost, 'M1: 申告のゴーストは連続 8 秒まで認める', `5 秒 ${ghostAt5} / 10 秒 ${snap[0].isGhost}`);
+
+    // M4: 近いが壁で隔てられたコースの別の部分へ跳ぶ (インフィールドを横切るショートカット) → 捨てる
+    let pair = null;
+    for (let a = 0; a < track.length && !pair; a += 40) {
+      const pa = track.poseAt(a, 0);
+      for (let b = a + 2000; b < a + track.length - 2000; b += 40) {
+        const pb = track.poseAt(b % track.length, 0);
+        const d = Math.hypot(pa.x - pb.x, pa.y - pb.y);
+        if (d > 400) continue;
+        let isWall = false;
+        for (let u = 0.05; u < 1; u += 0.05) if (track.surfaceCodeAt(pa.x + (pb.x - pa.x) * u, pa.y + (pb.y - pa.y) * u) === m.SurfaceCode.wall) isWall = true;
+        if (isWall) { pair = [a, b % track.length, d]; break; }
+      }
+    }
+    if (pair) {
+      const j2 = newJudge();
+      let t = startTime + 1000;
+      j2.applyState(1, state(t, track.gridSlots[0]), t);
+      let s2 = g0.s;
+      const target = pair[0];
+      while (track.deltaS(s2 % track.length, target) > 5 || track.deltaS(s2 % track.length, target) < -5) {
+        t += 1000 / 60;
+        s2 += 500 / 60;
+        j2.applyState(1, state(t, poseAt(s2, 0)), t);
+      }
+      t += 600;
+      const verdict = j2.applyState(1, state(t, track.poseAt(pair[1], 0)), t);
+      check(verdict === 'ignored', 'M4: 壁を横切る移動は捨てる (インフィールドのショートカット)', `${pair[2].toFixed(0)} px 離れた s=${pair[0]} → ${pair[1]}: ${verdict}`);
+    } else {
+      check(false, 'M4: 壁で隔てられた近い 2 点が見つからない');
+    }
+
+    // M5: 捨てられる状態 (壁の中) だけを送り続けると、3 秒でゴーストになる
+    for (let k = 0; k < 60 * 4; k++) {
+      now += 1000 / 60;
+      judge.applyState(1, state(now, { x: -100, y: -100, heading: 0 }), now);
+      judge.update(now);
+    }
+    check(judge.isStale(1), 'M5: 受け付けられない状態だけを送る車は 3 秒でゴースト');
+  }
+}
+
+console.log('\n== 不正対策の再発確認 (レース中の collision・接続) ==');
+{
+  const w = createRaceWorld({ seed: 41, latencyMs: 20, jitterMs: 10, lossRate: 0, profiles: [{ name: 'HOST', team: 1 }, { name: 'P2P', team: 2 }, { name: 'P3P', team: 3 }] });
+  // L2: DataChannel を開いたまま join しない相手は 5 秒で切断
+  const silent = w.net.connect();
+  let silentClosed = null;
+  silent.onClose = (r) => { silentClosed = r; };
+  w.clock.advance(2000);
+  for (const p of w.players) p.session.setReady(true, 'soft');
+  w.clock.advance(300);
+  check(w.host.startRace() === 'ok', 'レース開始');
+  w.clock.advance(300);
+  const race0 = w.players[0].session.race;
+  const bySlot = race0.entries.map((e) => w.players.find((p) => p.session.playerId === e.playerId));
+  const [slot0, slot1, slot2] = bySlot;
+  let fakeSent = false;
+  let farSent = false;
+  let relayedBefore = 0;
+  for (let steps = 0; steps < 60 * 12; steps++) {
+    driveStep(w, (p, race) => {
+      // H3: グリッド 2 番手が、ポールの車に衝撃 0 の偽の collision を送ってからフライングする
+      if (p === slot1 && race.phase === 'grid' && race.time > race.lightsOutAt - 1 && !fakeSent) {
+        fakeSent = true;
+        p.transport.sendEvent({ type: 'collision', other: slot0.session.playerId, impulseX: 0, impulseY: 0, time: race.hostNow() });
+      }
+      if (p === slot1 && race.phase === 'grid' && race.time > race.lightsOutAt - 0.3) p.controls.throttle = 1;
+      // H3: 離れた車 (3 番手とポール、100 px) への collision は中継しない
+      if (p === slot2 && race.phase === 'grid' && race.time > race.lightsOutAt - 0.8 && !farSent) {
+        farSent = true;
+        relayedBefore = w.relayed.length;
+        p.transport.sendEvent({ type: 'collision', other: slot0.session.playerId, impulseX: 0, impulseY: 0, time: race.hostNow() });
+      }
+    });
+  }
+  const pen = w.host.judge.carOf(slot1.session.playerId);
+  check(pen.isJumpStart && pen.penalty === 3, 'H3: 偽の collision を送っても、送った本人はフライングを免除されない');
+  const farRelayed = w.relayed.slice(relayedBefore).some((r) => r.from === slot2.session.playerId);
+  check(!farRelayed, 'H3: 接触しえない距離の collision は中継しない');
+  check(silentClosed !== null, 'L2: join しない相手は 5 秒で切断', String(silentClosed));
+
+  // H2: 上限を超える衝撃は中継しない。形の上の上限 (1e4) を超えるものは送り主を切断し、相手は壊れない
+  const victim = slot0;
+  const attacker = slot1;
+  const relayedCount = w.relayed.length;
+  const victimCar = victim.session.race.player.car;
+  const attackerCar = attacker.session.race.player.car;
+  // 接触しうる距離に置いた状態で送る (中継の距離の条件を満たす)
+  attacker.transport.sendEvent({ type: 'collision', other: victim.session.playerId, impulseX: 5000, impulseY: 0, time: attacker.session.race.hostNow() });
+  attacker.transport.sendEvent({ type: 'collision', other: victim.session.playerId, impulseX: 1e300, impulseY: 1e300, time: attacker.session.race.hostNow() });
+  for (let steps = 0; steps < 60; steps++) driveStep(w);
+  check(w.relayed.length === relayedCount, 'H2: 上限を超える衝撃は中継しない', `中継 ${w.relayed.length - relayedCount} 件`);
+  check(Number.isFinite(victimCar.x) && Number.isFinite(victimCar.vx) && victim.session.state !== 'closed', 'H2: 受け取る側の車は壊れず、切断されない');
+  check(attacker.session.state === 'closed' && Number.isFinite(attackerCar.x), 'H2: 壊れた大きさの衝撃を送った参加者は切断');
+}
+
+console.log('\n== 送信の失敗・形の確認 ==');
+{
+  const clock = new VirtualClock();
+  let attempts = 0;
+  const ping = new m.PingSession({ clock, send: () => { attempts++; throw new Error('InvalidStateError'); }, intervalMs: 1000 });
+  ping.start();
+  clock.advance(5500);
+  check(attempts >= 6 && ping.isRunning, 'M2: 送信が例外を投げても ping は止まらない', `${attempts} 回`);
+  ping.stop();
+  const noLines = { length: 1000, timingLines: [] };
+  const rc = { timingTimes: new Float64Array(10), lastTimingKey: -1 };
+  m.recordTimingByDistance(rc, noLines, 0, 0, 100, 1);
+  check(rc.lastTimingKey === -1, 'L3: タイミングラインが 0 本でも止まらない');
+  const settings = { course: 'course1', courseVersion: 3, laps: 3 };
+  check(m.parseHostMessage(JSON.stringify({ type: 'raceStart', session: 'race', startTime: 1, settings, grid: [1, 1], seed: 1 })) === null
+    && m.parseHostMessage(JSON.stringify({ type: 'raceStart', session: 'race', startTime: 1, settings, grid: [0, 1, 2, 3, 4, 5, 6, 7, 1], seed: 1 })) === null,
+    'L4: raceStart のグリッドの重複・8 台超は捨てる');
+  check(m.parseClientMessage(JSON.stringify({ type: 'collision', other: 1, impulseX: 1e300, impulseY: 0, time: 1 })) === null, 'H2: 形の上の上限を超える衝撃は不正なメッセージ');
 }
 
 console.log(failures === 0 ? '\nすべての確認が OK' : `\nNG が ${failures} 件`);

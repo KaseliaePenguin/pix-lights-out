@@ -157,18 +157,29 @@ export class PeerLink {
   /** 状態を送る。開いていない・送信待ちが 16KB を超えているときは捨てて false。data の連番の欄は書き換わる */
   sendState(data: ArrayBuffer): boolean {
     if (data.byteLength > stateMaxBytes) throw new Error(`state message too large: ${data.byteLength}`);
-    if (!this.isOpenValue || this.stateChannel.bufferedAmount > stateBufferLimit) return false;
+    const ch = this.stateChannel;
+    if (!this.isOpenValue || ch.readyState !== 'open' || ch.bufferedAmount > stateBufferLimit) return false;
     this.sequencer.stamp(data);
-    this.stateChannel.send(data);
-    return true;
+    // 閉じかけ (closing) の間は send が例外を投げるので、送れなかったものとして扱う (一斉送信のループを止めない)
+    try {
+      ch.send(data);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** イベント (JSON 文字列) を送る。捨てない (開いていなければ false) */
   sendEvent(text: string): boolean {
     if (isTextTooLarge(text)) throw new Error(`event message too large: ${text.length}`);
-    if (!this.isOpenValue) return false;
-    this.eventChannel.send(text);
-    return true;
+    const ch = this.eventChannel;
+    if (!this.isOpenValue || ch.readyState !== 'open') return false;
+    try {
+      ch.send(text);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** 実際に使われている候補の組から接続経路を調べる。まだ決まっていなければ null */

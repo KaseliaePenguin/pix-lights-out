@@ -1,4 +1,5 @@
 import { lerp, lerpAngle } from '../math';
+import { netRaceRules } from './netRaceRules';
 import type { CarNetState } from './stateCodec';
 
 /** 表示・判定に使う他車の姿勢と速度 */
@@ -66,8 +67,11 @@ export class RemoteCarTrack {
     this.x[i] = s.x;
     this.y[i] = s.y;
     this.heading[i] = s.heading;
-    this.sF[i] = s.sF;
-    this.sR[i] = s.sR;
+    // 壊れた速さで予測・接触の計算が暴れないよう、上限に丸める
+    const speed = Math.hypot(s.sF, s.sR);
+    const scale = speed > netRaceRules.snapshotSpeedMax ? netRaceRules.snapshotSpeedMax / speed : 1;
+    this.sF[i] = s.sF * scale;
+    this.sR[i] = s.sR * scale;
     this.steer[i] = s.steer;
     this.lap[i] = s.lap;
     this.checkpoint[i] = s.checkpoint;

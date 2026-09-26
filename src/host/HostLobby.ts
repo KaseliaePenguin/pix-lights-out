@@ -242,6 +242,7 @@ export class HostLobby {
 
   /** レースを始める (全員が準備完了のときだけ始まる) */
   startRace(): Promise<StartRaceResult> {
+    if (this.isClosed) return Promise.resolve('closed');
     return new Promise((resolve) => {
       this.startWaiters.push(resolve);
       this.worker.postMessage({ kind: 'startRace' });
@@ -256,7 +257,12 @@ export class HostLobby {
     this.relay.sendHostClosedNow();
     this.worker.postMessage({ kind: 'close' });
     for (const r of this.records) if (r.state === 'preparing') r.isCancelled = true;
-    setTimeout(() => this.worker.terminate(), terminateDelayMs);
+    for (const resolve of this.startWaiters.splice(0)) resolve('closed');
+    // Worker が closeAll を返さなくても、接続 (RTCPeerConnection) を残さない
+    setTimeout(() => {
+      this.relay.closeAllLinks();
+      this.worker.terminate();
+    }, terminateDelayMs);
   }
 
   // ------------------------------------------------------------------
