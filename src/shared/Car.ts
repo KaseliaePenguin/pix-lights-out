@@ -13,19 +13,18 @@ export interface CarEnvironment {
 /** 車輪の番号: 0 = 左前、1 = 右前、2 = 左後、3 = 右後 */
 export type WheelIndex = 0 | 1 | 2 | 3;
 
-/** grip = グリップ走行、spin = スピン (操作不能) */
-export type CarMode = 'grip' | 'spin';
+/**
+ * 壁の判定に使う当たり判定の外周の点の数と、前後方向の位置 (半分の長さに対する割合)。
+ * 点 0〜9 は左右 (偶数 = 左) × この 5 段、点 10・11 は前端・後端の中央。長方形の大きさは hitWidth / hitLength
+ */
+const outlinePointCount = 12;
+const outlineAlong: readonly number[] = [1, -1, 0.5, 0, -0.5];
 
-// 当たり判定の外周の点 (車の座標系: 右 = +x、前 = +y)。長方形 18×38 の角と辺の途中
-const outlineLocal: readonly (readonly [number, number])[] = [
-  [-9, 19], [9, 19], [-9, -19], [9, -19],
-  [-9, 9.5], [9, 9.5], [-9, 0], [9, 0], [-9, -9.5], [9, -9.5],
-  [0, 19], [0, -19],
-];
-
+/** 壁の判定で 1 回に動かす量の上限 (px)。これより大きく動くフレームは分けて判定する (薄い壁を突き抜けないため) */
+const wallSubstepMax = 4;
 
 /**
- * 車 1 台の物理 (car-physics.md 第 4 版からドリフト・ERS ブーストを除いたもの)。DOM に依存しない。
+ * 車 1 台の物理 (car-physics.md 第 5 版。第 4 版からドリフト・ERS ブーストを除いたもの)。DOM に依存しない。
  * 毎フレーム update(controls, dt) を呼ぶ。パラメータは params (既定は carParams) を毎フレーム読むので、
  * 調整パネルで carParams を書き換えると次のフレームから効く。
  * スリップストリーム (fSlip)・タイヤ摩耗・車同士の接触は M2 以降。
@@ -39,7 +38,6 @@ export class Car {
   /** 車体から見た前方向・右方向の速度 */
   sF = 0;
   sR = 0;
-  mode: CarMode = 'grip';
   steer = 0;
   fSlip = 0;
   fDrs = 0;
@@ -57,6 +55,7 @@ export class Car {
   /** 直前の update の開始時の位置 (ゲートの通過判定に使う) */
   prevX = 0;
   prevY = 0;
+  private prevHeading = 0;
 
   // --- 演出・HUD・デバッグ用の値 (update ごとに更新) ---
   /** グリップ使用率 uReq (grip モード。1 を超えると限界超え) */
@@ -77,7 +76,7 @@ export class Car {
   wheelsOnKerb = 0;
   /** 描画用の向き (grip では滑り角を足したもの。spin では車体の向きそのもの) */
   drawHeading = 0;
-  /** スキール音の目標の音量 0〜1 と再生速度 (16 節)。フェードは音の側で行う */
+  /** スキール音の目標の音量 0〜1 と再生速度 (14 節)。フェードは音の側で行う */
   squealVolume = 0;
   squealRate = 1;
   /** タイヤ痕を出すか: 後輪・前輪 */
@@ -109,6 +108,12 @@ export class Car {
   private isUpdating = false;
   private closedOutsideUpdate = false;
   private readonly contact: WallContact = { depth: 0, normalX: 0, normalY: 0 };
+  /** 壁の判定の途中経過 (このフレームで最初に押し戻したときの法線と接触点、壁に触れたか) */
+  private hitNx = 0;
+  private hitNy = 0;
+  private hitX = 0;
+  private hitY = 0;
+  private wallTouched = false;
 
   constructor(private readonly env: CarEnvironment, readonly params: Readonly<CarParams> = carParams) {}
 
@@ -140,6 +145,7 @@ export class Car {
     this.prevX = pose.x;
     this.prevY = pose.y;
     this.heading = pose.heading;
+    this.prevHeading = pose.heading;
     this.drawHeading = pose.heading;
     this.sF = 0;
     this.sR = 0;
@@ -147,7 +153,6 @@ export class Car {
     this.fDrs = 0;
     this.drsOpen = false;
     this.spinTimer = 0;
-    this.mode = 'grip';
     this.isReversing = false;
     this.reverseHold = 0;
     this.fullBrakeTime = 0;
@@ -189,6 +194,7 @@ export class Car {
     const p = this.params;
     this.prevX = this.x;
     this.prevY = this.y;
+    this.prevHeading = this.heading;
     this.wallImpact = 0;
     this.isScraping = false;
     this.lockupStarted = false;
@@ -211,7 +217,7 @@ export class Car {
     else if (Math.abs(steerInput) > Math.abs(this.steer)) this.steer = approach(this.steer, steerInput, p.steerRise * dt);
     else this.steer = approach(this.steer, steerInput, p.steerReturn * dt);
 
-    // 3. 車輪の路面 (10 節)
+    // 3. 車輪の路面 (8 節)
     let gripSum = 0;
     let brakeSum = 0;
     let accelSum = 0;
@@ -240,16 +246,17 @@ export class Car {
     this.grip = tyre * surfaceGrip * (1 - p.brakeGripLoss * brake) * drsGrip;
     this.brakeGrip = tyre * (brakeSum / 4);
     const bonus = Math.min(p.bonusCap, p.slipBonus * this.fSlip + p.drsBonus * this.fDrs);
-    const vEff = Math.min(p.vBase * (1 + bonus), this.speedLimit);
+    // 調整パネルで 0 にされても 0 で割らないよう下限を置く
+    const vEff = Math.max(1, Math.min(p.vBase * (1 + bonus), this.speedLimit));
 
     // 5. モードごとの更新
     if (this.spinTimer > 0) this.updateSpin(dt);
     else this.updateGrip(throttle, brake, controls, surfaceAccel, surfaceDecel, surfaceGrip, vEff, active, dt);
 
-    // 9. 壁との衝突 (11.2 節)
+    // 9. 壁との衝突 (9.2 節)
     this.resolveWalls(dt);
 
-    // 14 節: DRS (開くのは区間内でボタンを押したとき。閉じるのはブレーキ・スピン)
+    // 12 節: DRS (開くのは区間内でボタンを押したとき。閉じるのはブレーキ・スピン)
     if (this.drsOpen && (brake > 0 || this.spinTimer > 0)) this.closeDrs();
     else if (!this.drsOpen && active && this.drsAvailable && controls.drsPressed) {
       this.drsOpen = true;
@@ -257,7 +264,7 @@ export class Car {
     }
     this.fDrs = approach(this.fDrs, this.drsOpen ? 1 : 0, p.drsRate * dt);
 
-    // 12. 演出の判定 (16 節)
+    // 12. 演出の判定 (14 節)
     this.updateEffects(brake, dt);
     this.isUpdating = false;
   }
@@ -272,7 +279,7 @@ export class Car {
     const p = this.params;
     // 旋回 (6.2 節)
     const s = Math.abs(this.sF);
-    const yawLimit = s > 0 ? Math.min(p.yawMaxLow * Math.min(1, s / p.yawRampSpeed), (p.latGrip * p.steerDemand) / s) : 0;
+    const yawLimit = s > 0 ? Math.min(p.yawMaxLow * Math.min(1, s / Math.max(1e-3, p.yawRampSpeed)), (p.latGrip * p.steerDemand) / s) : 0;
     const yawCmd = this.steer * yawLimit * (this.sF >= 0 ? 1 : -1);
     const aLatMax = p.latGrip * this.grip;
     const aReq = s * Math.abs(yawCmd);
@@ -329,7 +336,7 @@ export class Car {
     const ratio = s / vEff;
     const aEngine = throttle * p.accel0 * surfaceAccel * (1 - ratio * ratio);
     const aBrake = brake * p.brakeDecel * this.brakeGrip;
-    const coastRatio = s / p.vBase;
+    const coastRatio = s / Math.max(1, p.vBase);
     const aCoast = (1 - throttle) * (p.coastBase + p.coastDrag * coastRatio * coastRatio);
     const resist = aBrake + aCoast + this.scrubDecel + surfaceDecel;
     this.sF += aEngine * dt;
@@ -338,7 +345,7 @@ export class Car {
   }
 
   // ------------------------------------------------------------------
-  // spin モード (9 節)
+  // spin モード (7 節)
 
   private updateSpin(dt: number): void {
     this.spinTimer = Math.max(0, this.spinTimer - dt);
@@ -355,7 +362,6 @@ export class Car {
     this.y += this.spinVy * dt;
     this.uReq = 0;
     if (this.spinTimer <= 0) {
-      this.mode = 'grip';
       this.setVelocity(this.spinVx, this.spinVy);
     }
   }
@@ -374,26 +380,7 @@ export class Car {
    * (壁への速度は次の update の壁の判定で処理される)。押し戻したら true
    */
   pushOutOfWalls(): boolean {
-    let moved = false;
-    for (let iter = 0; iter < 4; iter++) {
-      let maxDepth = 0;
-      let nx = 0;
-      let ny = 0;
-      for (let k = 0; k < outlineLocal.length; k++) {
-        this.localToWorld(outlineLocal[k][0], outlineLocal[k][1], tmpPoint);
-        this.env.wallContact(tmpPoint.x, tmpPoint.y, this.contact);
-        if (this.contact.depth > maxDepth && (this.contact.normalX !== 0 || this.contact.normalY !== 0)) {
-          maxDepth = this.contact.depth;
-          nx = this.contact.normalX;
-          ny = this.contact.normalY;
-        }
-      }
-      if (maxDepth <= 0) break;
-      this.x += nx * (maxDepth + 0.05);
-      this.y += ny * (maxDepth + 0.05);
-      moved = true;
-    }
-    return moved;
+    return this.pushOut(false);
   }
 
   /** 接触後の速度ベクトルを設定する (sF・sR を計算し直す。スピン中はスピンの速度) */
@@ -412,13 +399,12 @@ export class Car {
     const p = this.params;
     this.spinVx = this.vx;
     this.spinVy = this.vy;
-    this.spinDuration = kind === 'light' ? p.spinTimeLight : p.spinTimeContact;
+    this.spinDuration = Math.max(1e-3, kind === 'light' ? p.spinTimeLight : p.spinTimeContact);
     this.spinTimer = this.spinDuration;
     this.spinRate0 = (kind === 'light' ? p.spinYawLight : p.spinYaw) * direction;
     this.spinDecelNow = kind === 'light' ? p.spinDecelLight : p.spinDecel;
     this.spinStarted = true;
     this.isReversing = false;
-    this.mode = 'spin';
     this.closeDrs();
   }
 
@@ -436,43 +422,95 @@ export class Car {
   }
 
   // ------------------------------------------------------------------
-  // 壁 (11.2 節)
+  // 壁 (9.2 節)
 
-  private resolveWalls(dt: number): void {
-    const p = this.params;
-    let hitNx = 0;
-    let hitNy = 0;
-    let hitX = 0;
-    let hitY = 0;
-    let touched = false;
+  /** 外周の点 k (0〜outlinePointCount − 1) のワールド座標 */
+  private outlinePoint(k: number, out: { x: number; y: number }): { x: number; y: number } {
+    const hw = this.params.hitWidth / 2;
+    const hl = this.params.hitLength / 2;
+    if (k < 10) return this.localToWorld(k % 2 === 0 ? -hw : hw, hl * outlineAlong[k >> 1], out);
+    return this.localToWorld(0, k === 10 ? hl : -hl, out);
+  }
+
+  /**
+   * 壁へのめり込みを位置だけ押し戻す (最大 4 回)。record が true なら、このフレームで最初に押し戻したときの
+   * 法線と接触点 (いちばん深い点) を記録する。押し戻したら true
+   */
+  private pushOut(record: boolean): boolean {
+    let moved = false;
     for (let iter = 0; iter < 4; iter++) {
       let maxDepth = 0;
       let nx = 0;
       let ny = 0;
-      for (let k = 0; k < outlineLocal.length; k++) {
-        this.localToWorld(outlineLocal[k][0], outlineLocal[k][1], tmpPoint);
+      let px = 0;
+      let py = 0;
+      for (let k = 0; k < outlinePointCount; k++) {
+        this.outlinePoint(k, tmpPoint);
         this.env.wallContact(tmpPoint.x, tmpPoint.y, this.contact);
-        if (this.contact.depth > -0.5) touched = true;
+        if (record && this.contact.depth > -0.5) this.wallTouched = true;
         if (this.contact.depth > maxDepth && (this.contact.normalX !== 0 || this.contact.normalY !== 0)) {
           maxDepth = this.contact.depth;
           nx = this.contact.normalX;
           ny = this.contact.normalY;
-          if (iter === 0 || hitNx === 0) {
-            hitX = tmpPoint.x;
-            hitY = tmpPoint.y;
-          }
+          px = tmpPoint.x;
+          py = tmpPoint.y;
         }
       }
       if (maxDepth <= 0) break;
       this.x += nx * (maxDepth + 0.05);
       this.y += ny * (maxDepth + 0.05);
-      if (hitNx === 0 && hitNy === 0) {
-        hitNx = nx;
-        hitNy = ny;
+      moved = true;
+      if (record && this.hitNx === 0 && this.hitNy === 0) {
+        this.hitNx = nx;
+        this.hitNy = ny;
+        this.hitX = px;
+        this.hitY = py;
       }
     }
+    return moved;
+  }
+
+  private resolveWalls(dt: number): void {
+    const p = this.params;
+    this.hitNx = 0;
+    this.hitNy = 0;
+    this.wallTouched = false;
+    // このフレームの移動 (位置と向き) が大きければ、途中の位置でも押し戻す。
+    // 1 フレームで壁の厚さの半分以上めり込むと、反対側へ押し出されて突き抜けるため (DRS 込みの最高速で 9.6 px/フレーム)
+    const ex = this.x;
+    const ey = this.y;
+    const eh = this.heading;
+    const dx = ex - this.prevX;
+    const dy = ey - this.prevY;
+    const dh = eh - this.prevHeading;
+    const reach = Math.hypot(p.hitWidth, p.hitLength) / 2;
+    const sweep = Math.hypot(dx, dy) + Math.abs(dh) * reach;
+    const steps = Math.min(16, Math.max(1, Math.ceil(sweep / wallSubstepMax)));
+    if (steps === 1) {
+      this.pushOut(true);
+    } else {
+      this.x = this.prevX;
+      this.y = this.prevY;
+      let pushed = false;
+      for (let k = 1; k <= steps; k++) {
+        this.x += dx / steps;
+        this.y += dy / steps;
+        this.heading = this.prevHeading + (dh * k) / steps;
+        if (this.pushOut(true)) pushed = true;
+      }
+      // 壁に触れなかったフレームは、分けずに動かした結果と完全に同じにする
+      if (!pushed) {
+        this.x = ex;
+        this.y = ey;
+        this.heading = eh;
+      }
+    }
+    const hitNx = this.hitNx;
+    const hitNy = this.hitNy;
+    const hitX = this.hitX;
+    const hitY = this.hitY;
     if (hitNx === 0 && hitNy === 0) {
-      this.isScraping = touched && this.speed > 30;
+      this.isScraping = this.wallTouched && this.speed > 30;
       return;
     }
 
@@ -485,7 +523,7 @@ export class Car {
     const j = -vN;
     const tx = vx - hitNx * vN;
     const ty = vy - hitNy * vN;
-    const keep = 1 - Math.min(p.wallTangentLossMax, j / p.wallTangentLossDiv);
+    const keep = 1 - Math.min(p.wallTangentLossMax, j / Math.max(1e-3, p.wallTangentLossDiv));
     const newVn = -p.wallRestitution * vN;
     const speed = Math.hypot(vx, vy);
     const entryAngle = speed > 0 ? Math.asin(Math.min(1, j / speed)) : 0;
@@ -519,7 +557,7 @@ export class Car {
   }
 
   // ------------------------------------------------------------------
-  // 演出 (16 節)
+  // 演出 (14 節)
 
   private updateEffects(brake: number, dt: number): void {
     const p = this.params;
@@ -529,11 +567,11 @@ export class Car {
     if (spinning) {
       this.squealVolume = 1;
     } else if (onTarmac && s >= p.squealMinSpeed && this.uReq >= p.squealStart) {
-      this.squealVolume = clamp((this.uReq - p.squealStart) / p.squealRange, 0, 1);
+      this.squealVolume = clamp((this.uReq - p.squealStart) / Math.max(1e-3, p.squealRange), 0, 1);
     } else {
       this.squealVolume = 0;
     }
-    this.squealRate = p.squealRateMin + p.squealRateGain * Math.min(s / p.vBase, 1.2);
+    this.squealRate = p.squealRateMin + p.squealRateGain * Math.min(s / Math.max(1, p.vBase), 1.2);
 
     // タイヤ痕: 限界超え (後輪)、フルブレーキの開始 (前輪)、スピン (4 輪)
     this.skidRear = spinning || (onTarmac && this.uReq >= p.skidMarkUReq && s >= p.skidMarkMinSpeed);

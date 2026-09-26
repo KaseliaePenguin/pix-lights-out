@@ -1,5 +1,5 @@
 /**
- * 車の物理とレースのルールのパラメータ (car-physics.md 第 4 版 18 節、game-design.md 7 章)。
+ * 車の物理とレースのルールのパラメータ (car-physics.md 第 5 版 15 節、game-design.md 7・9 章)。
  * 数値を変えたら physicsVersion を上げる。コースデータを変えたときは、そのコースの TrackData.version を上げる。
  * ゴースト・自己ベストは、両方の組 (recordVersionOf) が保存時と違えば破棄する。
  */
@@ -66,20 +66,19 @@ export interface CarParams {
   visualSlipStart: number;
   visualSlipGain: number;
   visualSlipMax: number;
-  // 10 節: 路面
+  // 8 節: 路面
   surfaces: Readonly<Record<SurfaceKind, SurfaceParams>>;
-  // 16 節: 演出
+  // 14 節: 演出
   squealStart: number;
   squealRange: number;
   squealMinSpeed: number;
   squealRateMin: number;
   squealRateGain: number;
-  squealFadeTime: number;
   skidMarkUReq: number;
   skidMarkMinSpeed: number;
   lockupMarkTime: number;
   lockupMinSpeed: number;
-  // 13 節: スリップストリーム (M2 で使う。M1 では fSlip は常に 0)
+  // 11 節: スリップストリーム (決勝だけ。fSlip は RaceSession が更新する)
   slipBonus: number;
   slipRange: number;
   slipRearOffset: number;
@@ -87,17 +86,17 @@ export interface CarParams {
   slipHeading: number;
   slipMinSpeed: number;
   slipRate: number;
-  // 14 節: DRS
+  // 12 節: DRS
   drsBonus: number;
   drsGripMul: number;
   drsRate: number;
-  // 12 節: タイヤ (M1 は摩耗なし。グリップの式だけ使う)
+  // 10 節: タイヤ (M2 までは摩耗なし。グリップの式だけ使う)
   compoundGrip: Readonly<Record<TyreCompound, number>>;
   wearRate: Readonly<Record<TyreCompound, number>>;
   cliffStart: number;
   wearSlope: number;
   cliffSlope: number;
-  // 11 節: 接触
+  // 9 節: 接触
   restitution: number;
   attackerMargin: number;
   attackerLossMax: number;
@@ -110,7 +109,7 @@ export interface CarParams {
   spinImpulseCar: number;
   spinImpulseWall: number;
   spinWallMinAngle: number;
-  // 9 節: スピン (短い = 壁への強い衝突、長い = 車同士の接触)
+  // 7 節: スピン (短い = 壁への強い衝突、長い = 車同士の接触)
   spinTimeLight: number;
   spinYawLight: number;
   spinDecelLight: number;
@@ -118,7 +117,7 @@ export interface CarParams {
   spinYaw: number;
   spinDecel: number;
   pairCooldown: number;
-  // 15 節
+  // 13 節: ピットレーン
   pitSpeedLimit: number;
   // 1 節: 寸法
   hitWidth: number;
@@ -131,7 +130,7 @@ export interface CarParams {
 const deg = Math.PI / 180;
 
 /**
- * car-physics.md 第 4 版の初期値 (ドリフト・ERS ブーストは除いた)。ただし brakeDecel・steerRise・yawMaxLow は、
+ * car-physics.md 第 5 版の初期値 (第 4 版からドリフト・ERS ブーストを除いたもの)。ただし brakeDecel・steerRise・yawMaxLow は、
  * ユーザーが調整パネルで選んだ値。ユーザーの「緩やかな操作」に合わせて steerReturn も穏やかにした (仕様の値は specCarParamValues)。
  * 調整パネルがこのオブジェクトを書き換えるので、車は毎フレームここを読む
  */
@@ -175,7 +174,6 @@ export const carParams: Readonly<CarParams> = {
   squealMinSpeed: 150,
   squealRateMin: 0.9,
   squealRateGain: 0.25,
-  squealFadeTime: 0.15,
   skidMarkUReq: 1.0,
   skidMarkMinSpeed: 187.5,
   lockupMarkTime: 0.25,
@@ -222,7 +220,7 @@ export const carParams: Readonly<CarParams> = {
   wheelSide: 8,
 };
 
-/** car-physics.md 第 4 版の仕様の値のうち、ユーザーの選んだ値で置き換えたもの (sim で比べるときに使う) */
+/** 最初の案の値のうち、ユーザーの選んだ値で置き換えたもの (car-physics.md 第 5 版の表の括弧内。sim で比べるときに使う) */
 export const specCarParamValues: Readonly<Partial<CarParams>> = {
   brakeDecel: 650,
   steerRise: 15,
@@ -279,12 +277,6 @@ export interface RaceRules {
   countdownTime: number;
   /** ゴーストの記録頻度 (回/秒) */
   ghostRate: number;
-  /** カメラ (10.5 節) */
-  cameraLookAhead: number;
-  cameraLookAheadMax: number;
-  cameraFollowRate: number;
-  cameraBoundX: number;
-  cameraBoundY: number;
   /** 速度表示の換算 (km/h = px/秒 × この値) */
   kmhPerPxPerSec: number;
 }
@@ -306,11 +298,6 @@ export const raceRules: Readonly<RaceRules> = {
   soloStartDistance: 600,
   countdownTime: 3,
   ghostRate: 30,
-  cameraLookAhead: 0.4,
-  cameraLookAheadMax: 190,
-  cameraFollowRate: 4,
-  cameraBoundX: 250,
-  cameraBoundY: 170,
   kmhPerPxPerSec: 0.6,
 };
 

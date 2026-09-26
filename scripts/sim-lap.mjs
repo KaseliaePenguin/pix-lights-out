@@ -54,14 +54,14 @@ const drivableAt = (p) => track.surfaceCodeAt(p.x, p.y) !== m.SurfaceCode.wall;
 check(track.gridSlots.every(drivableAt) && drivableAt(track.soloStart), 'グリッド・開始位置が路面上');
 
 // ---------------------------------------------------------------- パラメータの組
-// user = 初期値 (ユーザーが選んだ値を含む)、spec = car-physics.md 第 4 版の仕様の値
+// user = 初期値 (ユーザーが選んだ値を含む)、spec = 最初の案の値 (car-physics.md 第 5 版の表の括弧内、specCarParamValues)
 const paramSets = {
   user: structuredClone(m.carParams),
   spec: { ...structuredClone(m.carParams), ...m.specCarParamValues },
 };
 const withGrip = (params, grip) => ({ ...params, compoundGrip: { soft: grip, hard: grip } });
 
-// ---------------------------------------------------------------- 車の基本性能 (car-physics.md 5.5・10 節)
+// ---------------------------------------------------------------- 車の基本性能 (car-physics.md 5.5 節)
 console.log('\n== 車の基本性能 (グリップ 1.0 の直線) ==');
 const flat = { surfaceAt: () => 'asphalt', wallContact: (x, y, out) => { out.depth = -50; out.normalX = 0; out.normalY = 0; return out; } };
 for (const [name, params] of Object.entries(paramSets)) {
@@ -83,7 +83,8 @@ for (const [name, params] of Object.entries(paramSets)) {
   }
   console.log(`  ${name}: ${parts.join(' / ')}`);
 }
-console.log('  (仕様の目安: 0→500 約 1.95 秒・655 px / 525→400 0.17 秒・77 px / →300 0.30 秒・124 px / →200 0.44 秒・160 px)');
+console.log('  (仕様 5.5 節の目安 user = 初期値 312.5: 0→500 約 1.95 秒・655 px / 525→400 約 0.30 秒・138 px / →300 約 0.56 秒・228 px / →200 約 0.83 秒・295 px)');
+console.log('  (仕様 5.5 節の目安 spec = 最初の案 650: 0→500 同じ / 525→400 0.17 秒・77 px / →300 0.30 秒・124 px / →200 0.44 秒・160 px)');
 
 // ---------------------------------------------------------------- レーシングライン
 console.log('\n== レーシングライン (速度プロファイルからの理想ラップ。基準グリップ 1.00、DRS なし) ==');
@@ -250,7 +251,7 @@ console.log('\n== コースの重なり・近道 ==');
   check(minD >= 224, '中心線上で 700 px 以上離れた部分どうしが 224 px 以上離れている', `最小 ${minD.toFixed(0)} px (${minAt})`);
 
   // チェックポイントを 1 つも飛ばさずに近道できる直線の経路 (車幅の 3 本の線が壁に当たらない) を探す。
-  // 得かどうかは時間で比べる: 経路は路面ごとの速さの上限 (アスファルト 525、芝生・砂利は car-physics.md 10 節の上限) で走ったとき、
+  // 得かどうかは時間で比べる: 経路は路面ごとの速さの上限 (アスファルト 525、芝生・砂利は car-physics.md 8 節の上限) で走ったとき、
   // コースは grip のレーシングラインの目標速度で走ったとき
   const L = track.length;
   const refLine = lines.user.gripSoft;
@@ -430,8 +431,113 @@ console.log('\n== 壁への衝突 ==');
   check(escaped === 0 && worst < 3, '壁を突き抜けない', `車の中心が壁の中に出た回数 ${escaped}、角の最大めり込み ${worst.toFixed(2)} px`);
 }
 
+{
+  // 薄い壁 (コースデータの minWallThickness) を DRS 込みの最高速・スピン中に直角でも突き抜けないか。
+  // 厚さ T の壁を x = 0 を中心に置いた環境で、壁の向こう側 (x > 0) に車の中心が出たら突き抜け
+  const T = track.data.minWallThickness;
+  const slab = {
+    surfaceAt: () => 'asphalt',
+    wallContact: (x, y, out) => {
+      out.depth = T / 2 - Math.abs(x);
+      if (out.depth <= -2) { out.normalX = 0; out.normalY = 0; } else { out.normalX = x >= 0 ? 1 : -1; out.normalY = 0; }
+      return out;
+    },
+  };
+  const vTop = m.carParams.vBase * (1 + m.carParams.drsBonus);
+  let through = 0;
+  let cases = 0;
+  const idle = m.createControls();
+  const full = m.createControls();
+  full.throttle = 1;
+  const run = (speed, headingDeg, spinDir, offsetY) => {
+    const car = new m.Car(slab);
+    // 壁の手前 (x < 0) から +x 方向へ。heading 90° = 東向き
+    car.placeAt({ x: -T / 2 - 30 + offsetY * 0.37, y: offsetY, heading: (headingDeg * Math.PI) / 180 });
+    car.sF = speed;
+    if (spinDir !== 0) car.startContactSpin(spinDir);
+    cases++;
+    for (let i = 0; i < 60; i++) {
+      car.update(spinDir !== 0 ? idle : full, dt);
+      if (car.x > 0 || !Number.isFinite(car.x)) { through++; return; }
+    }
+  };
+  for (const speed of [525, vTop]) {
+    for (const deg of [90, 70, 45]) {
+      for (const off of [0, 3, 7]) {
+        run(speed, deg, 0, off);
+        for (const dir of [1, -1]) for (const h of [0, 30, 60, 90, 120, 150]) run(speed, deg + h, dir, off);
+      }
+    }
+  }
+  console.log(`\n== 薄い壁 (厚さ ${T} px) への衝突: ${vTop.toFixed(1)} px/秒 (1 フレーム ${(vTop * dt).toFixed(1)} px) まで、スピン中 (8 rad/秒) を含む ${cases} 通り ==`);
+  check(through === 0, '最小の厚さの壁を直角・最高速・スピン中でも突き抜けない', `突き抜け ${through} 回`);
+}
+{
+  // 実際のコースで、両側が走れる場所になっている壁 (コースどうしの間の壁) のうち薄いものに、
+  // DRS 込みの最高速で直角に突っ込む (直進とスピン中)。壁の厚さの半分 = 壁の中の距離 (SDF) の最大値
+  const vTop = m.carParams.vBase * (1 + m.carParams.drsBonus);
+  const walls = [];
+  for (let s = 0; s < track.length; s += 20) {
+    for (const side of [1, -1]) {
+      let inWall = false;
+      let start = 0;
+      let peak = 0;
+      for (let d = track.widthAt(s) / 2; d < 700; d += 1) {
+        const q = track.poseAt(s, side * d);
+        const w = track.wallDistance(q.x, q.y);
+        if (!inWall) {
+          if (w > 0) { inWall = true; start = d; peak = w; }
+          continue;
+        }
+        peak = Math.max(peak, w);
+        if (w > 0) continue;
+        // 壁を抜けた先が走れる場所 (壁でない路面) なら、コースどうしの間の壁
+        const r = track.poseAt(s, side * (d + 10));
+        if (track.wallDistance(r.x, r.y) < 0 && track.surfaceCodeAt(r.x, r.y) !== m.SurfaceCode.wall) walls.push({ s, side, lat: start, width: d - start, peak });
+        break;
+      }
+    }
+  }
+  const halfSafe = 4;
+  const thin = walls.filter((w) => w.peak < 12);
+  const slivers = thin.filter((w) => w.peak < halfSafe);
+  let through = 0;
+  let cases = 0;
+  const idle = m.createControls();
+  const full = m.createControls();
+  full.throttle = 1;
+  for (const w of thin) {
+    if (w.peak < halfSafe) continue;
+    for (const spinDir of [0, 1, -1]) {
+      const start = track.poseAt(w.s, w.side * (w.lat - 40));
+      const car = new m.Car(track);
+      car.placeAt({ x: start.x, y: start.y, heading: start.heading + w.side * Math.PI / 2 });
+      car.sF = vTop;
+      if (spinDir !== 0) car.startContactSpin(spinDir);
+      cases++;
+      for (let i = 0; i < 60; i++) {
+        car.update(spinDir !== 0 ? idle : full, dt);
+        // 車の中心の通り道 (1 px ごと) が壁の中に入ったら突き抜け (中心が入る = 車の半分以上がめり込んでいる)
+        const len = Math.hypot(car.x - car.prevX, car.y - car.prevY);
+        let entered = !Number.isFinite(car.x);
+        for (let k = 0; k <= Math.ceil(len) && !entered; k++) {
+          const t = len > 0 ? Math.min(1, k / len) : 1;
+          if (track.wallDistance(car.prevX + (car.x - car.prevX) * t, car.prevY + (car.y - car.prevY) * t) > 0) entered = true;
+        }
+        if (entered) { through++; break; }
+      }
+    }
+  }
+  console.log(`  コースどうしの間の壁で厚さ 24 px 未満の場所 ${thin.length} か所 (20 px ごとに左右を調べた数) × 直進・スピン 2 方向 = ${cases} 通り`);
+  check(through === 0, 'コースの薄い壁 (厚さ 8 px 以上) を最高速・スピン中でも突き抜けない', `突き抜け ${through} 回`);
+  if (slivers.length > 0) {
+    const where = [...new Set(slivers.map((w) => `s=${w.s}${w.side > 0 ? '右' : '左'}`))].join(', ');
+    console.log(`  [注意] 厚さ 8 px 未満の壁のかけら ${slivers.length} か所 (壁の端のとがった部分など。突き抜けられる): ${where}`);
+  }
+}
+
 // ---------------------------------------------------------------- 芝生・砂利
-console.log('\n== コース外 (car-physics.md 10 節) ==');
+console.log('\n== コース外 (car-physics.md 8 節) ==');
 for (const kind of ['grass', 'gravel']) {
   const parts = [];
   for (const throttle of [1, 0]) {
@@ -448,7 +554,7 @@ for (const kind of ['grass', 'gravel']) {
   }
   console.log(`  ${kind}: 500 → ${m.carParams.surfaces[kind].speedCap} px/秒 まで ${parts.join(' / ')}`);
 }
-console.log('  (第 4 版の目安: 芝生 → 260 はアクセルを離して約 0.5 秒・踏んだまま約 1.2 秒、砂利 → 180 は約 0.6 秒・約 0.9 秒)');
+console.log('  (仕様 8 節の目安: 芝生 → 260 はアクセルを離して約 0.5 秒・踏んだまま約 1.2 秒、砂利 → 180 は約 0.6 秒・約 0.9 秒)');
 
 
 // ---------------------------------------------------------------- レビューの指摘の再発確認
