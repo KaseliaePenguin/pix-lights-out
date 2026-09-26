@@ -19,10 +19,11 @@ const images: Record<string, string> = {
   'title-bg': '/assets/images/title-bg.png',
   'title-logo': '/assets/images/title-logo.png',
 };
-// チームの車 (車番 1〜8): car-team-01 〜 car-team-08
+// チームの車 (車番 1〜8): car-team-01 〜 car-team-08 と、そのシャドウ表示 (ゴースト中) car-team-01-ghost 〜
 for (let team = 1; team <= 8; team++) {
   const name = `car-team-${String(team).padStart(2, '0')}`;
   images[name] = `/assets/images/${name}.png`;
+  images[`${name}-ghost`] = `/assets/images/${name}-ghost.png`;
 }
 
 /** JSON のデータ */
@@ -59,11 +60,28 @@ const seFiles = [
   'ui-error',
 ];
 /** sound-list.md で未作成のもの (読めなくても警告しない)。置かれたら自動で使われる */
-const plannedFiles: string[] = [];
+const plannedBgmFiles = ['result-theme', 'finish-jingle', 'win-jingle'];
+const plannedSeFiles = [
+  'start-light-on',
+  'start-go',
+  'false-start',
+  'crash-car-1',
+  'crash-car-2',
+  'crash-car-3',
+  'drs-available',
+  'final-lap',
+  'position-change',
+  'slipstream-wind-loop',
+  'gear-shift-1',
+  'gear-shift-2',
+  'engine-rev-1',
+  'engine-rev-2',
+];
+const plannedFiles: string[] = [...plannedBgmFiles, ...plannedSeFiles];
 
 const sounds: Record<string, string> = {};
-for (const name of bgmFiles) sounds[name] = `/assets/sounds/bgm/${name}.ogg`;
-for (const name of seFiles) sounds[name] = `/assets/sounds/se/${name}.ogg`;
+for (const name of [...bgmFiles, ...plannedBgmFiles]) sounds[name] = `/assets/sounds/bgm/${name}.ogg`;
+for (const name of [...seFiles, ...plannedSeFiles]) sounds[name] = `/assets/sounds/se/${name}.ogg`;
 
 export const assetManifest: AssetManifest = { images, sounds, data, optional: plannedFiles };
 
@@ -82,6 +100,11 @@ export const soundDefs = {
   'menu-theme': { files: ['menu-theme'], bus: 'bgm', volume: bgmMenu },
   'qualifying-theme': { files: ['qualifying-theme'], bus: 'bgm', volume: bgmRace, fallback: 'race-theme' },
   'race-theme': { files: ['race-theme'], bus: 'bgm', volume: bgmRace },
+  // リザルトの曲ができるまではメニューの曲を流す
+  'result-theme': { files: ['result-theme'], bus: 'bgm', volume: bgmMenu, fallback: 'menu-theme' },
+  // 自分のゴールで 1 回 (BGM と同じ音量設定)。優勝したときは win-jingle、なければ finish-jingle
+  'finish-jingle': { files: ['finish-jingle'], bus: 'bgm', volume: bgmMenu },
+  'win-jingle': { files: ['win-jingle'], bus: 'bgm', volume: bgmMenu, fallback: 'finish-jingle' },
 
   // 自車エンジン (AudioManager.createEngine で ON / OFF を組にして使う)
   'engine-player-loop': { files: ['engine-player-loop'], bus: 'drive', volume: engine },
@@ -127,6 +150,19 @@ export const soundDefs = {
     maxVoices: 4,
   },
   'scrape-loop': { files: ['scrape-loop'], bus: 'drive', volume: crash, release: 0.15 },
+  // 車同士の接触 (強さ 50 以上)。強さと自車からの距離で音量を変える
+  'crash-car': {
+    files: ['crash-car-1', 'crash-car-2', 'crash-car-3'],
+    bus: 'drive',
+    volume: crash,
+    rateJitter: 0.08,
+    maxVoices: 4,
+  },
+  // スリップストリームの効き (fSlip) に比例するループ
+  'slipstream-wind-loop': { files: ['slipstream-wind-loop'], bus: 'drive', volume: tyre, release: 0.3 },
+  'gear-shift': { files: ['gear-shift-1', 'gear-shift-2'], bus: 'drive', volume: engine, rateJitter: 0.04 },
+  // グリッドでアクセルを踏んだとき
+  'engine-rev': { files: ['engine-rev-1', 'engine-rev-2'], bus: 'drive', volume: engine, minInterval: 0.4 },
 
   // 通知
   // drs-open / close は素材が他の短い SE より 8〜11 dB 小さい (sound-list.md の生成記録) ため 2.5 倍にする
@@ -135,6 +171,13 @@ export const soundDefs = {
   'lap-complete': { files: ['lap-complete'], bus: 'world', volume: notify },
   'sector-time': { files: ['sector-time'], bus: 'world', volume: notify },
   'sector-best': { files: ['sector-best'], bus: 'world', volume: notify },
+  // スタート (game-design.md 7.2 節)
+  'start-light-on': { files: ['start-light-on'], bus: 'world', volume: notify },
+  'start-go': { files: ['start-go'], bus: 'world', volume: notify },
+  'false-start': { files: ['false-start'], bus: 'world', volume: notify },
+  'drs-available': { files: ['drs-available'], bus: 'world', volume: notify },
+  'final-lap': { files: ['final-lap'], bus: 'world', volume: notify },
+  'position-change': { files: ['position-change'], bus: 'world', volume: notify },
 
   // UI (ポーズ中も鳴る)
   'ui-cursor': { files: ['ui-cursor'], bus: 'ui', volume: ui },

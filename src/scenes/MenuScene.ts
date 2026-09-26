@@ -13,6 +13,7 @@ import {
   wasMenuDownPressed,
   wasMenuUpPressed,
 } from './menuKeys';
+import { RaceSetupScene } from './RaceSetupScene';
 import { SettingsScene } from './SettingsScene';
 import { loadTimeAttackBest } from './settingsStorage';
 import { TimeAttackScene } from './TimeAttackScene';
@@ -23,13 +24,13 @@ type MenuItem = 'timeAttack' | 'singleRace' | 'multiplayer' | 'settings' | 'cont
 interface MenuEntry {
   item: MenuItem;
   label: string;
-  /** M1 で選べるか。選べない項目にもカーソルは止まり、決定すると ui-error を鳴らす */
+  /** 選べるか。選べない項目にもカーソルは止まり、決定すると ui-error を鳴らす */
   isEnabled: boolean;
 }
 
 const entries: readonly MenuEntry[] = [
   { item: 'timeAttack', label: 'TIME ATTACK', isEnabled: true },
-  { item: 'singleRace', label: 'SINGLE RACE', isEnabled: false },
+  { item: 'singleRace', label: 'SINGLE RACE', isEnabled: true },
   { item: 'multiplayer', label: 'MULTIPLAYER', isEnabled: false },
   { item: 'settings', label: 'SETTINGS', isEnabled: true },
   { item: 'controls', label: 'CONTROLS', isEnabled: true },
@@ -109,6 +110,10 @@ export class MenuScene implements Scene {
         // メニューの曲を止める (走行画面の BGM は走行画面が流す)
         game.audio.stopBgm();
         game.changeScene(new TimeAttackScene(game));
+        break;
+      case 'singleRace':
+        // メニューの曲はレース設定でも流し続ける
+        game.changeScene(new RaceSetupScene(game));
         break;
       case 'settings':
         game.changeScene(new SettingsScene(game, () => game.changeScene(new MenuScene(game, 'settings'))));
