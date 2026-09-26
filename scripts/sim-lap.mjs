@@ -970,16 +970,24 @@ console.log('\n== 車同士の接触 (単体) ==');
   check(behind > 0.9 && offset === 0, 'スリップストリームは真後ろで効き、横にずれると効かない', `真後ろ ${behind.toFixed(2)} / 横 60 px ${offset.toFixed(2)}`);
 }
 {
-  // フライングと反応時間: プレイヤーがランプ点灯中に発進するとフライング (+3 秒)
+  // 消灯までは動けない: ランプ点灯中にアクセルやハンドルを入れても車は止まったままで、フライングにならない
   const session = new m.RaceSession({ track, totalLaps: 3, playerCarNumber: 1, cpuCount: 3, difficulty: 'normal', seed: 3, racingLine: raceLine });
   const c = m.createControls();
   const evs = [];
-  for (let i = 0; i < 60 * 3; i++) {
+  const x0 = session.player.car.x;
+  const y0 = session.player.car.y;
+  let maxMove = 0;
+  while (session.phase === 'grid') {
     c.throttle = session.time > 2 ? 1 : 0;
+    c.steerInput = session.time > 2 ? 1 : 0;
     for (const e of session.step(c, dt)) evs.push(e);
+    if (session.phase === 'grid') maxMove = Math.max(maxMove, Math.hypot(session.player.car.x - x0, session.player.car.y - y0));
   }
   const jump = evs.filter((e) => e.type === 'jumpStart');
-  check(jump.length === 1 && jump[0].carNumber === 1 && session.player.penalty === 3, 'グリッドで動くとフライングが 1 回だけ成立し +3 秒');
+  check(maxMove === 0 && jump.length === 0 && session.player.penalty === 0, '消灯までアクセルを踏んでも動かず、フライングにならない', `消灯前の移動 ${maxMove.toFixed(2)} px`);
+  c.steerInput = 0;
+  for (let i = 0; i < 30; i++) session.step(c, dt);
+  check(session.player.car.sF > 0, '消灯後はアクセルで発進できる', `0.5 秒後 ${session.player.car.sF.toFixed(0)} px/秒`);
   check(session.player.gridSlot === session.cars.length - 1, '予選スキップではプレイヤーが最後尾');
   // プレイヤーがリタイアすると、その場で結果が確定する (CPU は推定)
   session.retire(1);

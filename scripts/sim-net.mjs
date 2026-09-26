@@ -534,6 +534,11 @@ const racingLine = new m.RacingLine(track, { tyreGrip: m.carParams.compoundGrip.
 const dtStep = m.raceRules.step;
 
 /** ホスト (RaceHost を LoopbackNetwork の host に直接つなぐ) と参加者 (CPU が自車を運転する) */
+/** 改造したクライアントの代わり: 物理を通さずに車を前へ 3 px ずらす (1 フレームぶん) */
+function creep(car) {
+  car.pushBy(Math.sin(car.heading) * 3, -Math.cos(car.heading) * 3);
+}
+
 function createRaceWorld({ seed, profiles, laps = 3, latencyMs = 30, jitterMs = 50, lossRate = 0.05 }) {
   const clock = new VirtualClock();
   const net = new m.LoopbackNetwork({ clock, latencyMs, jitterMs, lossRate, seed });
@@ -645,8 +650,8 @@ console.log('\n== オンラインの決勝: 3 周 (遅延 30〜80 ms、ロス 5%
   const maxSteps = 60 * 400;
   while (steps++ < maxSteps) {
     driveStep(w, (p, race) => {
-      // BBB: 消灯の 0.3 秒前にアクセルを踏む (フライング)
-      if (p === bbb && race.phase === 'grid' && race.time > race.lightsOutAt - 0.3) p.controls.throttle = 1;
+      // BBB: 改造したクライアントのつもりで、消灯の 0.3 秒前から車を前へずらす (正規の操作では消灯まで動けない)
+      if (p === bbb && race.phase === 'grid' && race.time > race.lightsOutAt - 0.3) creep(race.player.car);
     });
     const race = hostP.session.race;
     const t = race.raceTime;
@@ -965,7 +970,7 @@ console.log('\n== 不正対策の再発確認 (レース中の collision・接�
         fakeSent = true;
         p.transport.sendEvent({ type: 'collision', other: slot0.session.playerId, impulseX: 0, impulseY: 0, time: race.hostNow() });
       }
-      if (p === slot1 && race.phase === 'grid' && race.time > race.lightsOutAt - 0.3) p.controls.throttle = 1;
+      if (p === slot1 && race.phase === 'grid' && race.time > race.lightsOutAt - 0.3) creep(race.player.car);
       // H3: 離れた車 (3 番手とポール、100 px) への collision は中継しない
       if (p === slot2 && race.phase === 'grid' && race.time > race.lightsOutAt - 0.8 && !farSent) {
         farSent = true;

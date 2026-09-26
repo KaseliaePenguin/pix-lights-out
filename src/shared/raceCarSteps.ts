@@ -1,5 +1,6 @@
 import { raceRules } from './carParams';
 import type { LapEvent } from './LapTracker';
+import type { Controls } from './controls';
 import type { RaceCar } from './RaceCar';
 import type { RaceEvent } from './RaceSession';
 import type { Pose } from './Track';
@@ -29,6 +30,16 @@ export interface RaceCarStepContext {
   readonly tmpPose: Pose;
 }
 
+/** 消灯前に物理へ渡す入力 (何も押していない) */
+const gridControls: Readonly<Controls> = {
+  throttle: 0,
+  brake: 0,
+  steerInput: 0,
+  steerIsAnalog: false,
+  drsPressed: false,
+  resetPressed: false,
+};
+
 /** rc.controls を決めたあとに呼ぶ。反応時間、コース復帰、DRS、物理を 1 フレーム進める */
 export function driveRaceCar(rc: RaceCar, ctx: RaceCarStepContext): void {
   const car = rc.car;
@@ -52,7 +63,8 @@ export function driveRaceCar(rc: RaceCar, ctx: RaceCarStepContext): void {
   rc.drs.update(car, rc.lap.projection.s);
   if (rc.wasInDrsZone && !rc.drs.isInZone) rc.isDrsEligible = false;
   rc.wasInDrsZone = rc.drs.isInZone;
-  car.update(rc.controls, ctx.dt);
+  // 消灯までは車を動かさない (グリッドでアクセルを踏んでも空ぶかしだけ)
+  car.update(ctx.isStarted ? rc.controls : gridControls, ctx.dt);
   rc.gearbox.update(car.isSpinning ? car.speed : car.sF);
   if (rc.drs.enabledOnEntry) events.push({ type: 'drsEnabled', carNumber: rc.carNumber });
   if (car.drsOpened) events.push({ type: 'drsOpened', carNumber: rc.carNumber });
