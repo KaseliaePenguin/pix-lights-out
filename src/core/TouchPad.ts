@@ -138,8 +138,11 @@ export class TouchPad {
     const bottom = even(H - Math.max(inset.bottom, margin));
     const top = even(inset.top + margin);
 
-    const steerW = even(u * 0.95);
-    const steerH = even(u * 1.1);
+    // ハンドルはいちばん長く押し続けるので大きめにする (スマートフォンで小さいと言われたため)
+    const steerW = even(u * 1.35);
+    const steerH = even(u * 1.65);
+    const brakeW = even(u * 0.95);
+    const brakeH = even(u * 1.1);
     const accelW = u;
     const accelH = even(u * 1.5);
     const small = even(u * 0.62);
@@ -148,13 +151,13 @@ export class TouchPad {
     const steerY = bottom - steerH;
     const accelX = right - accelW;
     const accelY = bottom - accelH;
-    const brakeX = accelX - gap - steerW;
+    const brakeX = accelX - gap - brakeW;
     this.buttons.length = 0;
     this.buttons.push(
       place('left', left, steerY, steerW, steerH),
       place('right', left + steerW + gap, steerY, steerW, steerH),
       place('throttle', accelX, accelY, accelW, accelH),
-      place('brake', brakeX, bottom - steerH, steerW, steerH),
+      place('brake', brakeX, bottom - brakeH, brakeW, brakeH),
       place('reset', left, steerY - gap * 2 - small, small, small),
       place('drs', right - small, accelY - gap * 2 - small, small, small),
       place('pause', left, top, small, small),
