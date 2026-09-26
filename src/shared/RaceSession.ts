@@ -1,5 +1,5 @@
 import type { CarParams, CpuDifficulty, RaceSessionRules } from './carParams';
-import { carParams, raceSessionRules } from './carParams';
+import { carParams, raceRules, raceSessionRules } from './carParams';
 import type { ContactResult } from './carContact';
 import { detectContact } from './carContact';
 import { ContactSystem } from './ContactSystem';
@@ -271,7 +271,8 @@ export class RaceSession {
       rc.status !== 'retired' &&
       rc.resetTimer < 0 &&
       rc.ghostTimeRemaining <= 0 &&
-      this.time > this.lightsOutAt &&
+      // グリッドで止まっていた時間を「低速が続いた」と数えないよう、消灯から低速の判定時間が過ぎるまでは出さない
+      this.time - this.lightsOutAt >= raceRules.resetSlowTime &&
       rc.lap.isResetAvailable(rc.car)
     );
   }

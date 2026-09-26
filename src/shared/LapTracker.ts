@@ -249,7 +249,8 @@ export class LapTracker {
     }
 
     // 5. コース復帰の条件
-    this.slowTimer = car.speed < raceRules.resetSlowSpeed ? this.slowTimer + dt : 0;
+    // 操作できない間 (タイムアタックのカウントダウンなど) は低速の時間を数えない
+    this.slowTimer = car.speed < raceRules.resetSlowSpeed && !car.controlLocked ? this.slowTimer + dt : 0;
     this.offTrackTimer = car.wheelsOffTrack >= 4 ? this.offTrackTimer + dt : 0;
 
     // 6. 最後に正常に走っていた地点

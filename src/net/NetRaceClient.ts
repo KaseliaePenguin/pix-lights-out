@@ -1,5 +1,5 @@
 import type { CarParams, RaceSessionRules } from '../shared/carParams';
-import { carParams, raceSessionRules } from '../shared/carParams';
+import { carParams, raceRules, raceSessionRules } from '../shared/carParams';
 import type { ContactOutcome, ContactResult } from '../shared/carContact';
 import { createContactOutcome, detectContact, resolveContact } from '../shared/carContact';
 import type { Controls } from '../shared/controls';
@@ -296,7 +296,8 @@ export class NetRaceClient {
       rc.status !== 'retired' &&
       rc.resetTimer < 0 &&
       rc.ghostTimeRemaining <= 0 &&
-      this.time > this.lightsOutAt &&
+      // グリッドで止まっていた時間を「低速が続いた」と数えないよう、消灯から低速の判定時間が過ぎるまでは出さない
+      this.time - this.lightsOutAt >= raceRules.resetSlowTime &&
       rc.lap.isResetAvailable(rc.car)
     );
   }
