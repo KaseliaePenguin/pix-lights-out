@@ -31,7 +31,7 @@ const data: Record<string, string> = {
   'title-paths': '/assets/data/title-paths.json',
 };
 
-const bgmFiles = ['menu-theme', 'qualifying-theme', 'race-theme'];
+const bgmFiles = ['menu-theme', 'qualifying-theme', 'race-theme', 'result-theme', 'finish-jingle', 'win-jingle'];
 const seFiles = [
   'engine-player-loop',
   'engine-player-decel-loop',
@@ -58,25 +58,26 @@ const seFiles = [
   'ui-cancel',
   'ui-pause',
   'ui-error',
-];
-/** sound-list.md で未作成のもの (読めなくても警告しない)。置かれたら自動で使われる */
-const plannedBgmFiles = ['result-theme', 'finish-jingle', 'win-jingle'];
-const plannedSeFiles = [
-  'start-light-on',
-  'start-go',
-  'false-start',
+  // M2 (CPU とのレース)
+  'engine-cpu-loop',
+  'engine-rev-1',
+  'engine-rev-2',
+  'gear-shift-1',
+  'gear-shift-2',
   'crash-car-1',
   'crash-car-2',
   'crash-car-3',
+  'slipstream-wind-loop',
   'drs-available',
+  'start-light-on',
+  'start-go',
+  'false-start',
   'final-lap',
   'position-change',
-  'slipstream-wind-loop',
-  'gear-shift-1',
-  'gear-shift-2',
-  'engine-rev-1',
-  'engine-rev-2',
 ];
+/** sound-list.md で未作成のもの (読めなくても警告しない)。置かれたら自動で使われる */
+const plannedBgmFiles: string[] = [];
+const plannedSeFiles: string[] = [];
 const plannedFiles: string[] = [...plannedBgmFiles, ...plannedSeFiles];
 
 const sounds: Record<string, string> = {};
@@ -89,6 +90,7 @@ export const assetManifest: AssetManifest = { images, sounds, data, optional: pl
 const bgmMenu = 0.7;
 const bgmRace = 0.4;
 const engine = 0.4;
+const engineCpu = 0.3;
 const tyre = 0.45;
 const crash = 0.6;
 const notify = 0.8;
@@ -109,6 +111,8 @@ export const soundDefs = {
   // 自車エンジン (AudioManager.createEngine で ON / OFF を組にして使う)
   'engine-player-loop': { files: ['engine-player-loop'], bus: 'drive', volume: engine },
   'engine-player-decel-loop': { files: ['engine-player-decel-loop'], bus: 'drive', volume: engine },
+  // 他車 (近い 4 台)。距離減衰・定位はゲーム側で掛ける (sound-guide.md 3 章)。素材は自車ループと同じ -16 LUFS
+  'engine-cpu-loop': { files: ['engine-cpu-loop'], bus: 'drive', volume: engineCpu, release: 0.3 },
 
   // タイヤ・路面 (ループ)。release は条件から外れたときのフェードアウト (sound-guide.md 4 章)
   'tire-squeal-loop': {
@@ -160,9 +164,23 @@ export const soundDefs = {
   },
   // スリップストリームの効き (fSlip) に比例するループ
   'slipstream-wind-loop': { files: ['slipstream-wind-loop'], bus: 'drive', volume: tyre, release: 0.3 },
-  'gear-shift': { files: ['gear-shift-1', 'gear-shift-2'], bus: 'drive', volume: engine, rateJitter: 0.04 },
+  // -1 は平均音量が -2 より約 2 dB 小さいため 1.3 倍にする
+  'gear-shift': {
+    files: ['gear-shift-1', 'gear-shift-2'],
+    bus: 'drive',
+    volume: engine,
+    fileVolumes: [1.3, 1],
+    rateJitter: 0.04,
+  },
   // グリッドでアクセルを踏んだとき
-  'engine-rev': { files: ['engine-rev-1', 'engine-rev-2'], bus: 'drive', volume: engine, minInterval: 0.4 },
+  // -1 はピーク制限で -2 より約 2.7 dB 小さい (-18.6 / -15.9 LUFS) ため 1.35 倍にする
+  'engine-rev': {
+    files: ['engine-rev-1', 'engine-rev-2'],
+    bus: 'drive',
+    volume: engine,
+    fileVolumes: [1.35, 1],
+    minInterval: 0.4,
+  },
 
   // 通知
   // drs-open / close は素材が他の短い SE より 8〜11 dB 小さい (sound-list.md の生成記録) ため 2.5 倍にする
@@ -173,10 +191,13 @@ export const soundDefs = {
   'sector-best': { files: ['sector-best'], bus: 'world', volume: notify },
   // スタート (game-design.md 7.2 節)
   'start-light-on': { files: ['start-light-on'], bus: 'world', volume: notify },
-  'start-go': { files: ['start-go'], bus: 'world', volume: notify },
-  'false-start': { files: ['false-start'], bus: 'world', volume: notify },
+  // 消灯の合図は点灯音 (0.3 秒) より長く平均音量が約 3 dB 小さい。合図として埋もれないよう 1.25 倍にする
+  'start-go': { files: ['start-go'], bus: 'world', volume: notify * 1.25 },
+  // 低いブザーでピーク制限のため -18.6 LUFS と小さい。1.2 倍にする
+  'false-start': { files: ['false-start'], bus: 'world', volume: notify * 1.2 },
   'drs-available': { files: ['drs-available'], bus: 'world', volume: notify },
-  'final-lap': { files: ['final-lap'], bus: 'world', volume: notify },
+  // 1 秒近いアルペジオで、短い通知音より平均音量が約 2 dB 小さい
+  'final-lap': { files: ['final-lap'], bus: 'world', volume: notify * 1.2 },
   'position-change': { files: ['position-change'], bus: 'world', volume: notify },
 
   // UI (ポーズ中も鳴る)
