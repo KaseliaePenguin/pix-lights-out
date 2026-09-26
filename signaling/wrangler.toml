@@ -1,0 +1,22 @@
+# PIX LIGHTS OUT の中継 (シグナリング)。使い方は README.md
+name = "pix-lights-out-signal"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+# 中継した中身を記録しないため、ログ (Workers Logs) は使わない
+[observability]
+enabled = false
+
+[vars]
+# 許可する Origin (カンマ区切り。ポートを * にするとそのホストのどのポートでも通す)
+ALLOWED_ORIGINS = "https://kaseliaepenguin.github.io,http://localhost:*,http://127.0.0.1:*"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomObject"
+
+# 無料プランで使えるのは SQLite バックエンドの Durable Object だけ
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomObject"]

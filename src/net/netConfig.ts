@@ -28,4 +28,32 @@ export const netTimings = {
   peerTimeoutMs: 10 * 1000,
   /** 接続経路 (LAN / NET) を調べ直す間隔 */
   routeRefreshMs: 5000,
+  /** 中継: WebSocket を開いて名乗りが通るまで。超えたら中継は使えないものとする (返答コード方式に切り替える) */
+  relayConnectTimeoutMs: 6000,
+  /** 中継: 参加者が offer を送ってからホストの answer が届くまで */
+  relayAnswerWaitMs: 10 * 1000,
+  /** 中継: answer を作って (受け取って) から DataChannel 2 本が開くまで (候補は trickle で届く) */
+  relayLinkTimeoutMs: 20 * 1000,
+  /** 中継: 生存確認の間隔 (つなぎっぱなしの WebSocket が途中の機器に切られないように) */
+  relayKeepaliveMs: 30 * 1000,
+  /** 中継: ホストの WebSocket が切れたときに入り直す回数と間隔 (同じ部屋・同じ招待リンクのまま) */
+  relayReconnectAttempts: 3,
+  relayReconnectDelayMs: 2000,
 } as const;
+
+/**
+ * 中継 (シグナリング、signaling/ の Cloudflare Worker) の URL (wss://…、末尾の / なし)。デプロイした URL をここに入れる。
+ * 開発時 (npm run dev) は wrangler dev (signaling/ で npm run dev、ポート 8787) を使う。
+ * 開発時だけ ?signal=off で中継を使わない (返答コード方式の確認用)、?signal=ws://… で別の中継を使う
+ */
+const deployedSignalingUrl = 'wss://pix-lights-out-signal.example.workers.dev';
+const devSignalingPort = 8787;
+
+/** 中継の URL。使わないときは null */
+export function signalingUrl(): string | null {
+  if (!import.meta.env.DEV) return deployedSignalingUrl;
+  const override = new URLSearchParams(location.search).get('signal');
+  if (override === 'off') return null;
+  if (override && /^wss?:\/\//.test(override)) return override.replace(/\/+$/, '');
+  return `ws://${location.hostname}:${devSignalingPort}`;
+}

@@ -1,7 +1,7 @@
 import { LocalTransport } from '../net/LocalTransport';
 import { NetClientSession } from '../net/NetClientSession';
 import type { NetProfile } from '../net/NetClientSession';
-import { netTimings } from '../net/netConfig';
+import { netTimings, signalingUrl } from '../net/netConfig';
 import type { GatherReport, LinkDiagnostics } from '../net/PeerLink';
 import { PeerLink } from '../net/PeerLink';
 import type { CodeError } from '../shared/net/connectionCode';
@@ -11,6 +11,8 @@ import { maxSlot } from '../shared/net/protocol';
 import type { Track } from '../shared/Track';
 import type { RelayLinkEndReason, WorkerPort } from './HostRelay';
 import { HostRelay } from './HostRelay';
+import type { HostRoomView, RelayAnswerResult } from './HostRoom';
+import { HostRoom } from './HostRoom';
 import type { RaceHostPhase, StartRaceResult } from './RaceHost';
 import type { FromWorkerMessage } from './workerProtocol';
 
@@ -33,6 +35,8 @@ export interface HostSlotView {
   state: HostSlotState;
   /** 招待コード (inviting のときだけ) */
   code: string | null;
+  /** どの方式で入った・入ろうとしているか (code = 招待・返答コード、room = 中継の招待リンク)。空きは null */
+  via: 'code' | 'room' | null;
   /** 招待コードの有効期限までの残り (ms、inviting のときだけ) */
   remainingMs: number | null;
   /** 候補の収集の結果 (STUN の応答なし・対称 NAT の疑いの警告に使う) */
@@ -69,6 +73,9 @@ interface SlotRecord {
   diagnostics: LinkDiagnostics | null;
   /** preparing 中に取り消された */
   isCancelled: boolean;
+  via: 'code' | 'room' | null;
+  /** 空きに戻すたびに増える (answer を作っている間に取り消された・使い回されたことを見分ける) */
+  generation: number;
 }
 
 export interface HostLobbyOptions {
@@ -76,6 +83,12 @@ export interface HostLobbyOptions {
   laps?: number;
   /** Worker を差し替える (既定は src/host/hostWorker.ts) */
   createWorker?: () => WorkerPort & { terminate(): void };
+}
+
+/** openRoom の設定 */
+export interface OpenRoomOptions {
+  /** 中継の URL (既定は netConfig の signalingUrl()。null なら中継を使わず、すぐ unavailable になる) */
+  url?: string | null;
 }
 
 /** close のあと Worker を止めるまで (hostClosed を送り終える時間) */
@@ -98,6 +111,17 @@ const terminateDelayMs = 1000;
  * if (lobby.status?.canStart) await lobby.startRace();
  * lobby.close();                                   // 全員に hostClosed
  * ```
+ *
+ * 中継 (network.md「中継による接続」) を使うときは、全員共通の招待リンクを 1 本出す。参加者はリンクを開くだけで入る
+ * (返答コードなし。枠は届いた順に自動で割り当てる)。中継が使えなければ room.state が unavailable になるので、
+ * 従来の issueInvite / acceptReply に切り替える:
+ * ```ts
+ * lobby.openRoom(location.origin + location.pathname);
+ * lobby.onChange = () => {
+ *   const room = lobby.room;                       // room.link を [コピー]、room.state === 'unavailable' なら issueInvite()
+ * };
+ * lobby.kick(3);                                   // 枠 3 の参加者を外す
+ * ```
  */
 export class HostLobby {
   readonly lobbyId: number;
@@ -116,6 +140,7 @@ export class HostLobby {
   private readonly startWaiters: ((r: StartRaceResult) => void)[] = [];
   private readonly onPageHide = () => this.relay.sendHostClosedNow();
   private isClosed = false;
+  private hostRoom: HostRoom | null = null;
 
   private constructor(profile: NetProfile, track: Track, options: HostLobbyOptions) {
     this.lobbyId = createLobbyId();
@@ -125,7 +150,10 @@ export class HostLobby {
     this.relay.onLinkEnd = (peerId, reason) => this.handleLinkEnd(peerId, reason);
     this.relay.onWorkerMessage = (msg) => this.handleWorkerMessage(msg);
     for (let slot = 1; slot <= maxSlot; slot++) {
-      this.records.push({ slot, state: 'empty', link: null, code: null, expiresAt: 0, gather: null, failure: null, diagnostics: null, isCancelled: false });
+      this.records.push({
+        slot, state: 'empty', link: null, code: null, expiresAt: 0, gather: null, failure: null, diagnostics: null, isCancelled: false,
+        via: null, generation: 0,
+      });
     }
     const channel = new MessageChannel();
     this.worker.postMessage({ kind: 'init', laps: options.laps ?? 3, localPort: channel.port2 }, [channel.port2]);
@@ -150,6 +178,55 @@ export class HostLobby {
     return r ? this.viewOf(r, performance.now()) : null;
   }
 
+  /** 中継の部屋の状態 (openRoom する前・closeRoom したあとは null) */
+  get room(): HostRoomView | null {
+    return this.hostRoom ? this.hostRoom.view : null;
+  }
+
+  /**
+   * 中継に部屋を作り、全員共通の招待リンクを出す (room.link)。すでに開いていれば閉じて作り直す (前のリンクは使えなくなる)。
+   * pageUrl は招待リンクの元にするページの URL (location.origin + location.pathname)。
+   * 中継が使えなければ room.state が unavailable になる (従来の招待・返答コードはいつでも使える)
+   */
+  openRoom(pageUrl: string, options: OpenRoomOptions = {}): HostRoomView | null {
+    if (this.isClosed) return null;
+    this.hostRoom?.close();
+    const url = options.url === undefined ? signalingUrl() : options.url;
+    this.hostRoom = HostRoom.open(pageUrl, url, {
+      lobbyId: this.lobbyId,
+      answerOffer: (sdp) => this.answerRelayOffer(sdp),
+      abandon: (link) => this.abandonRelayLink(link),
+      onChange: () => this.onChange?.(),
+    });
+    this.onChange?.();
+    return this.hostRoom.view;
+  }
+
+  /** 中継の部屋を閉じる (招待リンクは使えなくなる。つながっている参加者はそのまま) */
+  closeRoom(): void {
+    const room = this.hostRoom;
+    this.hostRoom = null;
+    room?.close();
+  }
+
+  /**
+   * 参加者を外す。参加済みなら接続を切ってロビーから外し (相手には接続が切れたように見える)、枠を空きに戻す。
+   * 招待中・接続中・失敗の枠は cancelInvite と同じ。外した人も招待リンクを持っていれば入り直せる
+   * (入れたくなければ closeRoom してから、ほかの人には openRoom で新しいリンクを送る)。外せたら true
+   */
+  kick(slot: number): boolean {
+    const r = this.records[slot - 1];
+    if (!r || r.state === 'empty') return false;
+    if (r.state !== 'joined') {
+      this.cancelInvite(slot);
+      return true;
+    }
+    if (r.link) this.hostRoom?.kickRelayPeerOf(r.link);
+    // Worker が外して kick を返すと、HostRelay が接続を閉じ、handleLinkEnd で枠が空く
+    this.worker.postMessage({ kind: 'kickPeer', peerId: slot });
+    return true;
+  }
+
   /** 参加者 (ホスト本人以外) とつながっているか。beforeunload の確認に使う */
   get hasGuests(): boolean {
     return this.relay.hasOpenLinks;
@@ -166,6 +243,7 @@ export class HostLobby {
     if (!r) return null;
     this.resetRecord(r);
     r.state = 'preparing';
+    r.via = 'code';
     this.onChange?.();
     try {
       const offer = await PeerLink.createInvite(this.lobbyId, r.slot);
@@ -223,6 +301,7 @@ export class HostLobby {
       r.isCancelled = true;
       return;
     }
+    if (r.link) this.hostRoom?.kickRelayPeerOf(r.link);
     this.relay.removeLink(r.slot);
     this.resetRecord(r);
     this.onChange?.();
@@ -253,6 +332,7 @@ export class HostLobby {
   close(): void {
     if (this.isClosed) return;
     this.isClosed = true;
+    this.closeRoom();
     window.removeEventListener('pagehide', this.onPageHide);
     this.relay.sendHostClosedNow();
     this.worker.postMessage({ kind: 'close' });
@@ -267,12 +347,56 @@ export class HostLobby {
 
   // ------------------------------------------------------------------
 
+  /** 中継経由の参加者の offer に、空いている枠で答える (HostRoom から呼ばれる) */
+  private async answerRelayOffer(offerSdp: string): Promise<RelayAnswerResult> {
+    if (this.isClosed) return { ok: false, reason: 'closed' };
+    this.expireStale();
+    const r = this.records.find((x) => x.state === 'empty') ?? this.records.find((x) => x.state === 'failed');
+    if (!r) return { ok: false, reason: 'full' };
+    this.resetRecord(r);
+    r.state = 'connecting';
+    r.via = 'room';
+    const generation = r.generation;
+    this.onChange?.();
+    let answer: { link: PeerLink; sdp: string };
+    try {
+      answer = await PeerLink.createRelayAnswer(offerSdp, this.lobbyId, r.slot);
+    } catch {
+      if (r.generation === generation) this.failRecord(r, 'connectionFailed');
+      return { ok: false, reason: 'closed' };
+    }
+    // answer を作っている間に取り消された (CANCEL・ロビーを閉じた)
+    if (this.isClosed || r.generation !== generation || r.state !== 'connecting') {
+      answer.link.close();
+      return { ok: false, reason: 'closed' };
+    }
+    const link = answer.link;
+    r.link = link;
+    link.onGather = (gather) => {
+      if (r.link !== link) return;
+      r.gather = gather;
+      this.onChange?.();
+    };
+    this.relay.addLink(r.slot, link);
+    return { ok: true, link, sdp: answer.sdp, slot: r.slot };
+  }
+
+  /** 中継経由の参加者がやめた (開く前の接続を閉じて枠を空ける) */
+  private abandonRelayLink(link: PeerLink): void {
+    const r = this.records.find((x) => x.link === link);
+    if (!r || r.state === 'joined') return;
+    this.relay.removeLink(r.slot);
+    this.resetRecord(r);
+    this.onChange?.();
+  }
+
   private viewOf(r: SlotRecord, now: number): HostSlotView {
     const isExpired = r.state === 'inviting' && now >= r.expiresAt;
     return {
       slot: r.slot,
       state: isExpired ? 'failed' : r.state,
       code: r.state === 'inviting' && !isExpired ? r.code : null,
+      via: r.state === 'empty' ? null : r.via,
       remainingMs: r.state === 'inviting' && !isExpired ? r.expiresAt - now : null,
       gather: r.gather,
       failure: isExpired ? 'expired' : r.failure,
@@ -323,6 +447,8 @@ export class HostLobby {
     r.failure = null;
     r.diagnostics = null;
     r.isCancelled = false;
+    r.via = null;
+    r.generation++;
   }
 
   private handleLinkOpen(peerId: PlayerId): void {

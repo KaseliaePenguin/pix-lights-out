@@ -85,7 +85,9 @@ export class WorkerHostTransport implements HostTransport {
         this.receiveEvent(msg.peerId, msg.text);
         return true;
       case 'violation':
-        if (this.peers.has(msg.peerId)) this.kick(msg.peerId, 'kicked');
+      case 'kickPeer':
+        // ホスト本人 (枠 0) は外さない
+        if (msg.peerId !== localPeerId && this.peers.has(msg.peerId)) this.kick(msg.peerId, 'kicked');
         return true;
       default:
         return false;

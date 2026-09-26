@@ -1,8 +1,9 @@
 import type { CodeKind, ConnectionCode } from '../shared/net/connectionCode';
 import { encodeConnectionCode } from '../shared/net/connectionCode';
+import type { RelayCandidate } from '../shared/net/relayCrypto';
 import { eventChannelId, eventMaxBytes, stateBufferLimit, stateChannelId, stateMaxBytes } from '../shared/net/protocol';
-import type { CandidateAnalysis, NetRoute } from '../shared/net/sdp';
-import { analyzeCandidates, classifyRoute, hasSharedPublicAddress, parseSdp } from '../shared/net/sdp';
+import type { CandidateAnalysis, NetRoute, SdpCandidate } from '../shared/net/sdp';
+import { analyzeCandidates, classifyRoute, hasSharedPublicAddress, parseCandidate, parseSdp } from '../shared/net/sdp';
 import { readStateType } from '../shared/net/stateCodec';
 import { StateSequencer } from '../shared/net/StateSequencer';
 import { netTimings, stunServers } from './netConfig';
@@ -19,6 +20,12 @@ export interface GatherReport {
   /** 5 秒で打ち切った */
   isTimedOut: boolean;
   analysis: CandidateAnalysis;
+}
+
+/** 中継経由 (trickle ICE) の offer / answer。sdp は候補の行を除いたもの (候補は setLocalCandidateHandler で別に送る) */
+export interface RelayLinkOffer {
+  link: PeerLink;
+  sdp: string;
 }
 
 export interface LinkOffer {
@@ -73,6 +80,16 @@ const defaultConfig: PeerLinkConfig = { iceServers: stunServers, gatherTimeoutMs
  * const inv = await decodeConnectionCode(inviteText, 'invite');
  * if (inv.ok) { const { link, code } = await PeerLink.createReply(inv.code); }  // code をホストに返す
  * ```
+ *
+ * 中継経由 (network.md「中継による接続」) は trickle ICE で、候補を集め終わるのを待たない。参加者が offer を作る:
+ * ```ts
+ * // 参加者
+ * const { link, sdp } = await PeerLink.createRelayOffer();   // sdp を中継でホストへ
+ * link.setLocalCandidateHandler((c) => sendToHost(c));       // 作る前に集まった候補もここで渡る
+ * await link.acceptRelayAnswer(answerSdp, lobbyId, slot);    // 以降、ホストの候補は addRemoteCandidate
+ * // ホスト
+ * const { link, sdp } = await PeerLink.createRelayAnswer(offerSdp, lobbyId, slot);
+ * ```
  */
 export class PeerLink {
   onOpen: (() => void) | null = null;
@@ -81,6 +98,8 @@ export class PeerLink {
   /** 閉じたとき 1 回だけ呼ばれる (自分で close したときは呼ばれない) */
   onClose: ((reason: LinkCloseReason) => void) | null = null;
   onViolation: ((violation: LinkViolation) => void) | null = null;
+  /** 中継経由のとき: 候補の収集が終わった (または 5 秒で打ち切った)。gatherReport にも入る */
+  onGather: ((report: GatherReport) => void) | null = null;
 
   private readonly pc: RTCPeerConnection;
   private readonly stateChannel: RTCDataChannel;
@@ -94,6 +113,11 @@ export class PeerLink {
   /** 同じ LAN の判定のためだけに持つ候補 (診断の記録には入れない) */
   private localCandidates: { type: string; address: string }[] | null = null;
   private remoteCandidates: { type: string; address: string }[] | null = null;
+  /** 中継経由 (trickle ICE) のとき: 自分の候補の渡し先と、渡し先が決まる前に集まった候補 */
+  private localCandidateHandler: ((c: RelayCandidate) => void) | null = null;
+  private pendingLocalCandidates: RelayCandidate[] | null = null;
+  private trickledLocal: SdpCandidate[] = [];
+  private trickledRemote: SdpCandidate[] = [];
 
   private constructor(role: CodeKind, lobbyId: number, slot: number, config: PeerLinkConfig) {
     this.diagnostics = { role, lobbyId, slot, gather: null, remote: null, history: [], route: null, closeReason: null };
@@ -156,6 +180,81 @@ export class PeerLink {
     this.noteRemote(reply);
     this.startTimeout(netTimings.connectTimeoutMs);
     await this.pc.setRemoteDescription({ type: 'answer', sdp: reply.sdp });
+  }
+
+  /**
+   * 中継経由の offer を作る (参加者)。候補の収集を待たずに返す。枠・ロビー ID は answer を受け取ったときに決まる。
+   * answer が来るまでの 10 秒 + 接続の 20 秒のうちに開かなければ onClose('timeout')
+   */
+  static async createRelayOffer(config: PeerLinkConfig = defaultConfig): Promise<RelayLinkOffer> {
+    const link = new PeerLink('reply', 0, 0, config);
+    try {
+      link.startTrickle();
+      await link.pc.setLocalDescription(await link.pc.createOffer());
+      link.trackGathering(config);
+      link.startTimeout(netTimings.relayAnswerWaitMs + netTimings.relayLinkTimeoutMs);
+      return { link, sdp: link.localSdpWithoutCandidates() };
+    } catch (e) {
+      link.close();
+      throw e;
+    }
+  }
+
+  /** 中継経由の offer に答える (ホスト)。20 秒のうちに開かなければ onClose('timeout') */
+  static async createRelayAnswer(offerSdp: string, lobbyId: number, slot: number, config: PeerLinkConfig = defaultConfig): Promise<RelayLinkOffer> {
+    const link = new PeerLink('invite', lobbyId, slot, config);
+    try {
+      link.startTrickle();
+      link.noteRemoteSdp(offerSdp);
+      await link.pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+      await link.pc.setLocalDescription(await link.pc.createAnswer());
+      link.trackGathering(config);
+      link.startTimeout(netTimings.relayLinkTimeoutMs);
+      return { link, sdp: link.localSdpWithoutCandidates() };
+    } catch (e) {
+      link.close();
+      throw e;
+    }
+  }
+
+  /** 中継経由の answer を受け取る (参加者)。20 秒のうちに開かなければ onClose('timeout') */
+  async acceptRelayAnswer(answerSdp: string, lobbyId: number, slot: number): Promise<void> {
+    this.diagnostics.lobbyId = lobbyId;
+    this.diagnostics.slot = slot;
+    this.noteRemoteSdp(answerSdp);
+    this.startTimeout(netTimings.relayLinkTimeoutMs);
+    await this.pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+  }
+
+  /** 自分の候補の渡し先を決める (中継経由のとき)。それまでに集まった候補はすぐに渡す */
+  setLocalCandidateHandler(handler: (c: RelayCandidate) => void): void {
+    this.localCandidateHandler = handler;
+    const pending = this.pendingLocalCandidates ?? [];
+    this.pendingLocalCandidates = null;
+    for (const c of pending) handler(c);
+  }
+
+  /**
+   * 相手の候補を加える (中継経由のとき)。相手の SDP を設定してから呼ぶ (中継の受信を順に処理すれば必ずそうなる)。
+   * 読めない候補は捨てる
+   */
+  async addRemoteCandidate(c: RelayCandidate): Promise<void> {
+    if (this.isClosed || c.candidate === '') return;
+    const parsed = parseCandidate(c.candidate);
+    if (parsed) {
+      this.trickledRemote.push(parsed);
+      this.updateRemoteFromTrickle();
+    }
+    try {
+      await this.pc.addIceCandidate({ candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex });
+    } catch {
+      // 相手のブラウザが出した、こちらで使えない候補 (種類違いなど)
+    }
+  }
+
+  /** 候補の収集の結果 (中継経由では、終わるまで null) */
+  get gatherReport(): GatherReport | null {
+    return this.diagnostics.gather;
   }
 
   get isOpen(): boolean {
@@ -243,6 +342,58 @@ export class PeerLink {
     this.diagnostics.gather = gather;
     const code = await encodeConnectionCode({ kind, lobbyId: this.diagnostics.lobbyId, slot: this.diagnostics.slot, sdp });
     return { link: this, code, gather };
+  }
+
+  /** trickle ICE を始める (setLocalDescription より前に呼ぶ。候補は渡し先が決まるまでためておく) */
+  private startTrickle(): void {
+    this.pendingLocalCandidates = [];
+    this.pc.addEventListener('icecandidate', (e) => {
+      if (this.isClosed || !e.candidate || !e.candidate.candidate) return;
+      const c: RelayCandidate = { candidate: e.candidate.candidate, sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex };
+      const parsed = parseCandidate(c.candidate);
+      if (parsed) this.trickledLocal.push(parsed);
+      if (this.localCandidateHandler) this.localCandidateHandler(c);
+      else this.pendingLocalCandidates?.push(c);
+    });
+  }
+
+  /** 候補の収集の終わりを待って、診断用の結果を残す (待たずに進める) */
+  private trackGathering(config: PeerLinkConfig): void {
+    const started = performance.now();
+    void this.waitForGathering(config.gatherTimeoutMs).then((isTimedOut) => {
+      if (this.isClosed) return;
+      const candidates = this.trickledLocal;
+      this.localCandidates = candidates.map((c) => ({ type: c.type, address: c.address }));
+      this.updateSamePublicAddress();
+      const gather: GatherReport = { elapsedMs: Math.round(performance.now() - started), isTimedOut, analysis: analyzeCandidates(candidates) };
+      this.diagnostics.gather = gather;
+      this.onGather?.(gather);
+    });
+  }
+
+  /** 候補の行を除いた自分の SDP (候補は trickle で別に送る。中継の 1 通を小さく保つ) */
+  private localSdpWithoutCandidates(): string {
+    const sdp = this.pc.localDescription?.sdp;
+    if (!sdp) throw new Error('no local description');
+    const lines = sdp.split(/\r?\n/).filter((line) => line !== '' && !line.startsWith('a=candidate:') && !line.startsWith('a=end-of-candidates'));
+    return lines.join('\r\n') + '\r\n';
+  }
+
+  private noteRemoteSdp(sdp: string): void {
+    this.trickledRemote = parseSdp(sdp).candidates;
+    this.updateRemoteFromTrickle();
+  }
+
+  private updateRemoteFromTrickle(): void {
+    const analysis = analyzeCandidates(this.trickledRemote);
+    this.diagnostics.remote = {
+      isStunUnreachable: analysis.isStunUnreachable,
+      isSymmetricNatSuspected: analysis.isSymmetricNatSuspected,
+      isFullSdp: true,
+      candidateTypes: this.trickledRemote.filter((c) => c.type === 'host' || c.type === 'srflx').map((c) => c.type),
+    };
+    this.remoteCandidates = this.trickledRemote.map((c) => ({ type: c.type, address: c.address }));
+    this.updateSamePublicAddress();
   }
 
   /** 候補の収集が終わるのを待つ。打ち切ったら true */

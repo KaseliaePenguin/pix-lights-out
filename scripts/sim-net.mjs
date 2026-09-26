@@ -2,8 +2,9 @@
 //   node scripts/sim-net.mjs
 // 招待・返答コードの往復 (Chrome・Firefox 形式の SDP)、コードの長さ、壊れたコードの判定、バイナリ形式、
 // LoopbackTransport での ping / pong と時刻合わせ、RaceHost + NetClientSession でのオンラインの決勝
-// (CPU の運転で全員が完走、接触の中継、状態が届かない車のゴースト・リタイア、切断、ホストの終了、不正対策)。
-// WebRTC そのものと Worker はブラウザでしか確かめられない。
+// (CPU の運転で全員が完走、接触の中継、状態が届かない車のゴースト・リタイア、切断、ホストの終了、不正対策)、
+// 中継 (シグナリング) の招待リンク (#room=)・暗号化と認証・部屋の処理 (signaling/ の RoomCore)・Origin の確認。
+// WebRTC そのものと Worker はブラウザでしか確かめられない。中継の Worker そのものは signaling/scripts/check-local.mjs (wrangler dev) で確かめる。
 // TypeScript を esbuild (vite に同梱) でまとめてから読み込む (sim-lap.mjs と同じ方法)。ゲーム本体では使わない。
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +38,11 @@ export { netRaceRules } from './src/shared/net/netRaceRules';
 export { PingSession } from './src/shared/net/PingSession';
 export { recordTimingByDistance } from './src/shared/raceStandings';
 export { SurfaceCode } from './src/shared/Track';
+export * from './src/shared/net/relayProtocol';
+export * from './src/shared/net/relayCrypto';
+export * from './src/shared/net/roomLink';
+export { RoomCore } from './signaling/src/RoomCore';
+export { isAllowedOrigin } from './signaling/src/origin';
 `;
 const bundle = await build({
   stdin: { contents: entry, resolveDir: root, loader: 'ts' },
@@ -1040,6 +1046,233 @@ console.log('\n== 送信の失敗・形の確認 ==');
     && m.parseHostMessage(JSON.stringify({ type: 'raceStart', session: 'race', startTime: 1, settings, grid: [0, 1, 2, 3, 4, 5, 6, 7, 1], seed: 1 })) === null,
     'L4: raceStart のグリッドの重複・8 台超は捨てる');
   check(m.parseClientMessage(JSON.stringify({ type: 'collision', other: 1, impulseX: 1e300, impulseY: 0, time: 1 })) === null, 'H2: 形の上の上限を超える衝撃は不正なメッセージ');
+}
+
+console.log('\n== 中継: 招待リンク (#room=) ==');
+{
+  const cred = await m.createRoomCredentials();
+  check(m.isRoomId(cred.roomId) && m.isRoomKey(cred.key) && cred.secret.length === 43, '部屋 ID・鍵は 22 文字、ホストの秘密は 43 文字 (Base64url)');
+  check(await m.roomIdOfSecret(cred.secret) === cred.roomId, '部屋 ID = ホストの秘密のハッシュ (中継が同じ計算で確かめる)');
+  check(await m.roomIdOfSecret('short') === null && await m.roomIdOfSecret(cred.secret.slice(1) + '!') === null, '形の違う秘密は null');
+  const other = await m.createRoomCredentials();
+  check(other.roomId !== cred.roomId && other.key !== cred.key, '部屋ごとに違う値');
+  const link = m.roomLinkOf('https://kaseliaepenguin.github.io/pix-lights-out/#room=old', cred);
+  check(link === `https://kaseliaepenguin.github.io/pix-lights-out/#room=${cred.roomId}.${cred.key}`, 'リンクの形 (<ページの URL>#room=<部屋 ID>.<鍵>)', `${link.length} 文字`);
+  check(!link.includes(cred.secret), 'リンクにホストの秘密は入らない');
+  const hash = link.slice(link.indexOf('#'));
+  const parsed = m.roomLinkFromHash(hash);
+  check(parsed?.roomId === cred.roomId && parsed?.key === cred.key, 'location.hash から部屋 ID と鍵を取り出す');
+  check(m.roomLinkFromHash('#join=PLO1I.abc') === null && m.roomLinkFromHash('') === null && m.roomLinkFromHash('#room=abc.def') === null,
+    '中継の招待リンクでない・短すぎるフラグメントは null');
+  check(m.isRoomLinkHash('#room=broken') && !m.isRoomLinkHash('#join=PLO1I.x'), '前置きだけの判定 (URL から消すかどうか)');
+  check(m.parseRoomLink(`入って! ${link} よろしく`)?.key === cred.key, '貼り付け: 前後に文があるリンク');
+  check(m.parseRoomLink(`${link.slice(0, 60)}\n${link.slice(60)}`)?.key === cred.key, '貼り付け: 折り返しで切れたリンク');
+  check(m.parseRoomLink(`join: ${link} thanks`)?.key === cred.key, '貼り付け: 後ろに英単語が続くリンク');
+  check(m.parseRoomLink(`${link}x`) === null, '鍵が 22 文字でない (後ろに文字がくっついた) ものは読まない');
+  check(m.extractConnectionCode(link) === null && m.checkConnectionCode(link, 'invite').ok === false, '従来の招待コードの読み取りは中継のリンクを拾わない');
+}
+
+console.log('\n== 中継: 暗号化と認証 (RelayCipher) ==');
+{
+  const cred = await m.createRoomCredentials();
+  const host = await m.RelayCipher.create(cred.roomId, cred.key);
+  const guest = await m.RelayCipher.create(cred.roomId, cred.key);
+  const sid = m.createRelaySessionId();
+  const sdp = chromeSdp({ setup: 'actpass', candidates: [] });
+  const offer = { type: 'offer', sid, pv: m.protocolVersion, sdp };
+  const sealed = await guest.seal('toHost', offer);
+  check(!sealed.includes('v=0') && !sealed.includes(sid) && /^[A-Za-z0-9_-]+$/.test(sealed), '暗号文に SDP・sid が見えない (Base64url)', `${sealed.length} 文字`);
+  check(sealed.length < m.relayLimits.maxFrameBytes - 200, '候補を除いた offer は 1 通の上限 (4KB) に余裕をもって収まる', `${sealed.length} 文字`);
+  const r1 = await host.open('toHost', sealed);
+  check(r1.ok && r1.payload.type === 'offer' && r1.payload.sdp === sdp && r1.payload.sid === sid, '復号できる (offer)');
+  const r2 = await host.open('toHost', sealed);
+  check(!r2.ok && r2.error === 'replay', '同じものの再送は拒否 (replay)');
+  // 1 文字書き換え
+  const bytes = m.decodeBase64url(sealed);
+  bytes[20] ^= 1;
+  const r3 = await host.open('toHost', m.encodeBase64url(bytes));
+  check(!r3.ok && r3.error === 'auth', '書き換えたものは認証で拒否');
+  const wrongKey = await m.RelayCipher.create(cred.roomId, (await m.createRoomCredentials()).key);
+  const r4 = await wrongKey.open('toHost', await guest.seal('toHost', offer));
+  check(!r4.ok && r4.error === 'auth', '別の鍵では読めない');
+  const otherRoom = await m.createRoomCredentials();
+  const sameKeyOtherRoom = await m.RelayCipher.create(otherRoom.roomId, cred.key);
+  const r5 = await sameKeyOtherRoom.open('toHost', await guest.seal('toHost', offer));
+  check(!r5.ok && r5.error === 'auth', '同じ鍵でも別の部屋 ID では読めない (部屋をまたいだ使い回しの拒否)');
+  const r6 = await guest.open('toGuest', await host.seal('toHost', offer));
+  check(!r6.ok && r6.error === 'auth', '向き違い (ホストあてのものを参加者に送り返す) は拒否');
+  const now = Date.now();
+  const old = await guest.seal('toHost', offer, now - 11 * 60 * 1000);
+  const r7 = await host.open('toHost', old, now);
+  check(!r7.ok && r7.error === 'stale', '10 分より古いものは拒否 (stale)');
+  const future = await guest.seal('toHost', offer, now + 11 * 60 * 1000);
+  check((await host.open('toHost', future, now)).ok === false, '10 分より先の時刻のものも拒否');
+  const skewed = await guest.seal('toHost', offer, now - 3 * 60 * 1000);
+  check((await host.open('toHost', skewed, now)).ok, '時計のずれが 10 分以内なら受け付ける');
+  const answer = { type: 'answer', sid, lobbyId: 0xdeadbeef, slot: 3, sdp: chromeSdp({ setup: 'active', candidates: [] }) };
+  const ra = await guest.open('toGuest', await host.seal('toGuest', answer));
+  check(ra.ok && ra.payload.type === 'answer' && ra.payload.slot === 3 && ra.payload.lobbyId === 0xdeadbeef, '復号できる (answer)');
+  const rb = await host.open('toHost', await host.seal('toHost', answer));
+  check(!rb.ok && rb.error === 'malformed', '向きに合わない種類 (ホストあての answer) は拒否');
+  const cand = { type: 'cand', sid, c: { candidate: 'candidate:842163049 1 udp 1677729535 203.0.113.45 50027 typ srflx raddr 0.0.0.0 rport 0', sdpMid: '0', sdpMLineIndex: 0 } };
+  const rc = await host.open('toHost', await guest.seal('toHost', cand));
+  check(rc.ok && rc.payload.type === 'cand' && rc.payload.c.sdpMid === '0', '復号できる (候補)');
+  const badCand = { type: 'cand', sid, c: { candidate: 'x'.repeat(50), sdpMid: '0', sdpMLineIndex: 0 } };
+  check((await host.open('toHost', await guest.seal('toHost', badCand))).ok === false, '形の違う候補は拒否');
+  check((await host.open('toHost', await guest.seal('toHost', { type: 'offer', sid: 'short', pv: 1, sdp }))).ok === false, '形の違う sid は拒否');
+  check((await host.open('toHost', await guest.seal('toHost', { ...offer, sdp: 'v=0' + 'a'.repeat(4000) }))).ok === false, '長すぎる SDP は拒否');
+  const rej = await guest.open('toGuest', await host.seal('toGuest', { type: 'reject', sid, reason: 'full', pv: m.protocolVersion }));
+  check(rej.ok && rej.payload.reason === 'full', '復号できる (reject)');
+  check(await m.RelayCipher.create('short', cred.key) === null && await m.RelayCipher.create(cred.roomId, 'bad!') === null, '形の違う部屋 ID・鍵では作れない');
+  check((await host.open('toHost', 'not-base64!')).ok === false && (await host.open('toHost', 'AAAA')).ok === false, '壊れた文字列は拒否');
+}
+
+console.log('\n== 中継: フレームの形 ==');
+{
+  check(m.parseRelayClientFrame('{"t":"join"}')?.t === 'join' && m.parseRelayClientFrame('{"t":"host","secret":"x"}')?.t === 'host', 'join・host を読む');
+  check(m.parseRelayClientFrame('{"t":"send","to":0,"data":"abc"}')?.t === 'send' && m.parseRelayClientFrame('{"t":"send","to":-1,"data":"a"}') === null
+    && m.parseRelayClientFrame('{"t":"send","to":0,"data":""}') === null && m.parseRelayClientFrame('{"t":"send","to":1.5,"data":"a"}') === null, 'send の宛先・中身を確かめる');
+  check(m.parseRelayClientFrame('nope') === null && m.parseRelayClientFrame('null') === null && m.parseRelayClientFrame('{"t":"x"}') === null, '壊れたフレームは null');
+  check(m.parseRelayServerFrame('{"t":"ready","role":"guest","peer":3,"remainingMs":1000}')?.peer === 3 && m.parseRelayServerFrame('{"t":"ready","role":"x","peer":3,"remainingMs":1}') === null,
+    'ready を読む');
+  check(m.relayCloseNameOf(4009) === 'full' && m.relayCloseNameOf(1006) === null, 'close コードから理由の名前');
+  check(m.isFrameTooLarge('a'.repeat(4097)) && !m.isFrameTooLarge('a'.repeat(4096)) && m.isFrameTooLarge('あ'.repeat(1400)), '1 通の大きさの上限 (UTF-8 で数える)');
+}
+
+console.log('\n== 中継: 部屋の処理 (RoomCore、Durable Object と同じもの) ==');
+{
+  let now = 1_000_000;
+  const sockets = [];
+  const core = new m.RoomCore({ sockets: () => sockets.filter((s) => !s.closed), now: () => now });
+  let nextId = 0;
+  const open = (roomId) => {
+    const s = {
+      infoValue: m.RoomCore.initialInfo(roomId, `s${nextId++}`, now), sent: [], closed: null,
+      get info() { return this.infoValue; },
+      save(info) { this.infoValue = { ...info }; },
+      send(text) { if (this.closed) throw new Error('closed'); this.sent.push(text); },
+      close(code, reason) { this.closed = { code, reason }; },
+      frames() { return this.sent.filter((t) => t !== 'pong').map((t) => JSON.parse(t)); },
+      last() { const f = this.frames(); return f[f.length - 1]; },
+    };
+    sockets.push(s);
+    return s;
+  };
+  const say = (s, frame) => core.onMessage(s, typeof frame === 'string' ? frame : JSON.stringify(frame));
+  const cred = await m.createRoomCredentials();
+  const room = cred.roomId;
+
+  const early = open(room);
+  await say(early, { t: 'join' });
+  check(early.closed?.code === m.relayCloseCodes.noRoom, 'ホストがいない部屋に入る → noRoom');
+
+  const fake = open(room);
+  await say(fake, { t: 'host', secret: (await m.createRoomCredentials()).secret });
+  check(fake.closed?.code === m.relayCloseCodes.unauthorized, '別の秘密でホストを名乗る → unauthorized (なりすまし不可)');
+  const wrongRoom = open((await m.createRoomCredentials()).roomId);
+  await say(wrongRoom, { t: 'host', secret: cred.secret });
+  check(wrongRoom.closed?.code === m.relayCloseCodes.unauthorized, '本物の秘密でも別の部屋 ID では拒否');
+
+  const host = open(room);
+  await say(host, { t: 'host', secret: cred.secret });
+  const ready = host.last();
+  check(ready?.t === 'ready' && ready.role === 'host' && ready.remainingMs === m.relayLimits.roomLifetimeMs, 'ホストが部屋を作る (ready、寿命 30 分)');
+  check(core.nextAlarmAt() === now + m.relayLimits.roomLifetimeMs, 'アラームは部屋の寿命に合わせる');
+
+  const g1 = open(room);
+  await say(g1, { t: 'join' });
+  check(g1.last()?.t === 'ready' && g1.last().peer === 1 && host.last()?.t === 'joined' && host.last().peer === 1, '参加者が入る (番号 1、ホストに joined)');
+  await say(g1, { t: 'send', to: 5, data: 'secret-1' });
+  check(host.last()?.t === 'msg' && host.last().from === 1 && host.last().data === 'secret-1', '参加者 → ホストへ中継 (宛先は無視してホストへ)');
+  await say(host, { t: 'send', to: 1, data: 'secret-2' });
+  check(g1.last()?.t === 'msg' && g1.last().from === 0 && g1.last().data === 'secret-2', 'ホスト → 参加者へ中継');
+  const g2 = open(room);
+  await say(g2, { t: 'join' });
+  const g2Count = g2.frames().length;
+  await say(host, { t: 'send', to: 1, data: 'only-for-1' });
+  check(g2.frames().length === g2Count, 'ほかの参加者あてのものは届かない');
+  await say(g1, { t: 'kick', peer: 2 });
+  check(g1.closed?.code === m.relayCloseCodes.badRequest && !g2.closed, '参加者は kick できない (送った人が切られる)');
+  check(host.last()?.t === 'left' && host.last().peer === 1, '参加者が切られたらホストに left');
+  await say(host, { t: 'kick', peer: 2 });
+  check(g2.closed?.code === m.relayCloseCodes.kicked, 'ホストは参加者を外せる (kicked)');
+
+  const guests = [];
+  for (let i = 0; i < 8; i++) {
+    const g = open(room);
+    await say(g, { t: 'join' });
+    guests.push(g);
+  }
+  check(guests.slice(0, 7).every((g) => !g.closed) && guests[7].closed?.code === m.relayCloseCodes.full, '同時に入れる参加者は 7 人 (8 人目は full)');
+  await say(guests[0], { t: 'send', to: 0, data: 'x'.repeat(m.relayLimits.maxFrameBytes) });
+  check(guests[0].closed?.code === m.relayCloseCodes.tooLarge, '1 通が 4KB を超えたら切る (tooLarge)');
+  await core.onMessage(guests[1], new ArrayBuffer(8));
+  check(guests[1].closed?.code === m.relayCloseCodes.badRequest, 'バイナリは受け付けない');
+  await say(guests[2], 'ping');
+  check(guests[2].sent[guests[2].sent.length - 1] === 'pong' && !guests[2].closed, 'ping には pong (回数に数えない)');
+  for (let i = 0; i <= m.relayLimits.burstCount; i++) await say(guests[2], { t: 'send', to: 0, data: 'spam' });
+  check(guests[2].closed?.code === m.relayCloseCodes.rateLimited, `短い間に ${m.relayLimits.burstCount} 通を超えたら切る (rateLimited)`);
+  const slow = guests[3];
+  for (let i = 0; i < m.relayLimits.maxGuestFrames + 1 && !slow.closed; i++) {
+    now += 200;
+    await say(slow, { t: 'send', to: 0, data: 'x' });
+  }
+  check(slow.closed?.code === m.relayCloseCodes.rateLimited, `1 本の接続で ${m.relayLimits.maxGuestFrames} 通を超えたら切る`);
+  await say(guests[4], '{"t":"host","secret":"x"}');
+  check(guests[4].closed?.code === m.relayCloseCodes.badRequest, '名乗ったあとにもう一度名乗ると切る');
+
+  // 名乗らない接続
+  const silent = open(room);
+  check(core.nextAlarmAt() === silent.info.openedAt + m.relayLimits.helloTimeoutMs, '名乗る前の接続があれば、その締め切りにアラーム');
+  now += m.relayLimits.helloTimeoutMs;
+  core.onAlarm();
+  check(silent.closed?.code === m.relayCloseCodes.helloTimeout && !host.closed, '10 秒名乗らない接続はアラームで切る');
+
+  // 名乗る前の接続の数
+  const pendings = [];
+  while (core.canAccept()) pendings.push(open(room));
+  check(pendings.length === m.relayLimits.maxPendingSockets, `名乗る前の接続は ${m.relayLimits.maxPendingSockets} 本まで (それ以上は 503)`);
+  for (const p of pendings) p.close(1000, 'test');
+
+  // ホストの入り直し (寿命は引き継ぐ)
+  const createdAt = host.info.roomCreatedAt;
+  const host2 = open(room);
+  await say(host2, { t: 'host', secret: cred.secret });
+  check(host.closed?.code === m.relayCloseCodes.replaced && host2.last()?.t === 'ready' && host2.info.roomCreatedAt === createdAt,
+    '同じ秘密で入り直すと前の接続は replaced、寿命は延びない');
+  const live = guests.filter((g) => !g.closed);
+  check(live.length > 0, '入り直しでは参加者は切られない');
+  const g9 = open(room);
+  await say(g9, { t: 'join' });
+  check(g9.last()?.peer > 9, '参加者の番号は使い回さない (入り直しても続きから)', `番号 ${g9.last()?.peer}`);
+
+  // 期限切れ
+  now = createdAt + m.relayLimits.roomLifetimeMs;
+  core.onAlarm();
+  check(host2.closed?.code === m.relayCloseCodes.expired && live.every((g) => g.closed?.code === m.relayCloseCodes.expired), '30 分で部屋を閉じる (全員 expired)');
+  const after = open(room);
+  await say(after, { t: 'join' });
+  check(after.closed?.code === m.relayCloseCodes.noRoom, '閉じた部屋には入れない (noRoom)');
+
+  // ホストが抜けたら参加者も切る
+  const host3 = open(room);
+  await say(host3, { t: 'host', secret: cred.secret });
+  const g10 = open(room);
+  await say(g10, { t: 'join' });
+  host3.closed = { code: 1001, reason: 'gone' };
+  core.onClose(host3);
+  check(g10.closed?.code === m.relayCloseCodes.hostLeft, 'ホストが抜けたら参加者を切る (hostLeft)');
+  check(core.nextAlarmAt() === null, '誰もいなければアラームなし');
+}
+
+console.log('\n== 中継: Origin の確認 ==');
+{
+  const allowed = 'https://kaseliaepenguin.github.io,http://localhost:*';
+  check(m.isAllowedOrigin('https://kaseliaepenguin.github.io', allowed), '配信先の Origin は通す');
+  check(m.isAllowedOrigin('http://localhost:5173', allowed) && m.isAllowedOrigin('http://localhost:4173', allowed), 'localhost はどのポートでも通す (:*)');
+  check(!m.isAllowedOrigin('https://evil.example', allowed) && !m.isAllowedOrigin('https://kaseliaepenguin.github.io.evil.example', allowed)
+    && !m.isAllowedOrigin('http://localhost:5173.evil.example', allowed) && !m.isAllowedOrigin('http://localhost.evil:80', allowed), 'ほかの Origin・似た名前は通さない');
+  check(!m.isAllowedOrigin(null, allowed) && !m.isAllowedOrigin('null', allowed), 'Origin がない要求は通さない');
 }
 
 console.log(failures === 0 ? '\nすべての確認が OK' : `\nNG が ${failures} 件`);

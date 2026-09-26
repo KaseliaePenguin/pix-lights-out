@@ -21,7 +21,8 @@ export type ToWorkerMessage =
   | { kind: 'event'; peerId: PlayerId; text: string }
   /** 受信サイズの上限超え・形式違い (送り主を切断する) */
   | { kind: 'violation'; peerId: PlayerId }
-  /** ホストの操作 */
+  /** ホストの操作 (kickPeer = ホストが参加者をロビーから外す) */
+  | { kind: 'kickPeer'; peerId: PlayerId }
   | { kind: 'setLaps'; laps: number }
   | { kind: 'startRace' }
   | { kind: 'close' };
