@@ -15,6 +15,7 @@ import {
 } from './menuKeys';
 import { RaceSetupScene } from './RaceSetupScene';
 import { SettingsScene } from './SettingsScene';
+import { MultiplayerScene } from './MultiplayerScene';
 import { loadTimeAttackBest } from './settingsStorage';
 import { TimeAttackScene } from './TimeAttackScene';
 import { TitleScene } from './TitleScene';
@@ -31,7 +32,7 @@ interface MenuEntry {
 const entries: readonly MenuEntry[] = [
   { item: 'timeAttack', label: 'TIME ATTACK', isEnabled: true },
   { item: 'singleRace', label: 'SINGLE RACE', isEnabled: true },
-  { item: 'multiplayer', label: 'MULTIPLAYER', isEnabled: false },
+  { item: 'multiplayer', label: 'MULTIPLAYER', isEnabled: true },
   { item: 'settings', label: 'SETTINGS', isEnabled: true },
   { item: 'controls', label: 'CONTROLS', isEnabled: true },
 ];
@@ -114,6 +115,10 @@ export class MenuScene implements Scene {
       case 'singleRace':
         // メニューの曲はレース設定でも流し続ける
         game.changeScene(new RaceSetupScene(game));
+        break;
+      case 'multiplayer':
+        // メニューの曲はロビーでも流し続ける
+        game.changeScene(new MultiplayerScene(game));
         break;
       case 'settings':
         game.changeScene(new SettingsScene(game, () => game.changeScene(new MenuScene(game, 'settings'))));

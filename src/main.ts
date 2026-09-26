@@ -1,6 +1,8 @@
 import { assetManifest, soundDefs } from './assetList';
 import { Game } from './core/Game';
 import type { Scene } from './core/Scene';
+import { GuestLobbyScene } from './scenes/GuestLobbyScene';
+import { HostLobbyScene } from './scenes/HostLobbyScene';
 import { RaceScene } from './scenes/RaceScene';
 import { loadRaceSetup, newRaceSeed } from './scenes/raceSetup';
 import { applyVolumeSettings, loadSettings } from './scenes/settingsStorage';
@@ -11,12 +13,14 @@ import { drawText, setUiFontImage } from './ui/text';
 
 /**
  * 最初の画面。開発時だけ ?scene=timeattack / ?scene=race で走行画面から始める (headless のスクリーンショット確認用)。
- * race はレース設定の既定値 (CPU 7 台、NORMAL、3 周) で始める
+ * race はレース設定の既定値 (CPU 7 台、NORMAL、3 周) で始める。?scene=lobby-host / ?scene=lobby-join はロビー (ホスト / 参加者)
  */
 function firstScene(): Scene {
   const direct = import.meta.env.DEV ? new URLSearchParams(location.search).get('scene') : null;
   if (direct === 'timeattack') return new TimeAttackScene(game);
   if (direct === 'race') return new RaceScene(game, loadRaceSetup(), newRaceSeed());
+  if (direct === 'lobby-host') return new HostLobbyScene(game, null);
+  if (direct === 'lobby-join') return new GuestLobbyScene(game, null);
   return new TitleScene(game);
 }
 

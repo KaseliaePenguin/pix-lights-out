@@ -3,6 +3,7 @@ import type { Scene } from '../core/Scene';
 import { colors } from '../ui/colors';
 import { drawFooterHint, drawScreenTitle } from '../ui/menuList';
 import { drawPanel } from '../ui/panel';
+import { drawParagraph } from '../ui/paragraph';
 import { drawText } from '../ui/text';
 import { wasMenuBackPressed, wasMenuConfirmPressed } from './menuKeys';
 
@@ -62,6 +63,16 @@ export class HelpScene implements Scene {
       color: colors.text,
       align: 'center',
     });
+
+    // マルチの注意 (network.md「ホストのタブが…」の 7、「コードに IP アドレスが含まれる」)
+    drawParagraph(
+      ctx,
+      [
+        "MULTIPLAYER: IF THE HOST'S COMPUTER GOES TO SLEEP, EVERYONE IS DISCONNECTED.",
+        'CONNECTING SENDS YOUR GLOBAL IP ADDRESS TO THE STUN SERVERS (GOOGLE, CLOUDFLARE).',
+      ],
+      60, noteY + 88, width - 120, { color: colors.subtext, align: 'center' },
+    );
 
     drawFooterHint(ctx, 'ENTER / ESC: BACK', width / 2, height - 36);
   }
