@@ -40,6 +40,8 @@ export interface CarNetState {
   isGhost: boolean;
   isInPit: boolean;
   isSpinning: boolean;
+  /** コース復帰の手順中 (置き直しで位置が飛ぶ。ホストは瞬間移動として捨てない) */
+  isResetting: boolean;
 }
 
 export interface CarStateMessage {
@@ -85,11 +87,12 @@ const flagReversing = 4;
 const flagGhost = 8;
 const flagPit = 16;
 const flagSpinning = 32;
+const flagResetting = 64;
 
 export function createCarNetState(id: PlayerId = 0): CarNetState {
   return {
     id, x: 0, y: 0, heading: 0, sF: 0, sR: 0, steer: 0, lap: 0, checkpoint: 0,
-    isDrsOpen: false, isBraking: false, isReversing: false, isGhost: false, isInPit: false, isSpinning: false,
+    isDrsOpen: false, isBraking: false, isReversing: false, isGhost: false, isInPit: false, isSpinning: false, isResetting: false,
   };
 }
 
@@ -109,7 +112,8 @@ function writeCar(view: DataView, o: number, c: CarNetState): void {
   view.setUint8(o, c.id);
   view.setUint8(o + 1,
     (c.isDrsOpen ? flagDrs : 0) | (c.isBraking ? flagBraking : 0) | (c.isReversing ? flagReversing : 0)
-    | (c.isGhost ? flagGhost : 0) | (c.isInPit ? flagPit : 0) | (c.isSpinning ? flagSpinning : 0));
+    | (c.isGhost ? flagGhost : 0) | (c.isInPit ? flagPit : 0) | (c.isSpinning ? flagSpinning : 0)
+    | (c.isResetting ? flagResetting : 0));
   view.setFloat32(o + 2, c.x);
   view.setFloat32(o + 6, c.y);
   view.setFloat32(o + 10, c.heading);
@@ -140,6 +144,7 @@ function readCar(view: DataView, o: number, c: CarNetState): boolean {
   c.isGhost = (flags & flagGhost) !== 0;
   c.isInPit = (flags & flagPit) !== 0;
   c.isSpinning = (flags & flagSpinning) !== 0;
+  c.isResetting = (flags & flagResetting) !== 0;
   return Number.isFinite(c.x) && Number.isFinite(c.y) && Number.isFinite(c.heading)
     && Number.isFinite(c.sF) && Number.isFinite(c.sR);
 }

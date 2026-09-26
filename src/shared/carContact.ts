@@ -23,6 +23,18 @@ export interface ContactOutcome {
   isBAttacker: boolean;
   spinA: boolean;
   spinB: boolean;
+  /**
+   * B (相手) の速度の変化 (px/秒) と、B が回る向き (+1 = 時計回り、回らなければ 0)。
+   * pushBoth が false (マルチ) のときも計算する。相手の端末に collision で伝える値
+   */
+  dvBx: number;
+  dvBy: number;
+  spinDirB: number;
+}
+
+/** ContactOutcome の入れ物を作る (使い回す) */
+export function createContactOutcome(): ContactOutcome {
+  return { impact: 0, isAAttacker: false, isBAttacker: false, spinA: false, spinB: false, dvBx: 0, dvBy: 0, spinDirB: 0 };
 }
 
 const tmpAxes = new Float64Array(8);
@@ -85,6 +97,9 @@ export function resolveContact(a: Car, b: Car, c: ContactResult, applyImpulse: b
   out.isBAttacker = false;
   out.spinA = false;
   out.spinB = false;
+  out.dvBx = 0;
+  out.dvBy = 0;
+  out.spinDirB = 0;
 
   // 1. 押し戻し
   const push = pushBoth ? c.depth / 2 + 0.05 : c.depth + 0.05;
@@ -130,6 +145,8 @@ export function resolveContact(a: Car, b: Car, c: ContactResult, applyImpulse: b
   if (!isB) [nvbx, nvby] = capForward(b, nvbx, nvby, sFB);
 
   // マルチでは相手の車は相手の端末が動かす (car-physics.md 9.1 節の collision メッセージ)
+  out.dvBx = nvbx - vbx;
+  out.dvBy = nvby - vby;
   a.applyContactVelocity(nvax, nvay);
   if (pushBoth) b.applyContactVelocity(nvbx, nvby);
 
@@ -143,9 +160,10 @@ export function resolveContact(a: Car, b: Car, c: ContactResult, applyImpulse: b
       a.startContactSpin(sideA > 0 ? -1 : 1);
       out.spinA = true;
     }
-    if (pushBoth && (isB || lateralB)) {
-      b.startContactSpin(sideB > 0 ? -1 : 1);
+    if (isB || lateralB) {
       out.spinB = true;
+      out.spinDirB = sideB > 0 ? -1 : 1;
+      if (pushBoth) b.startContactSpin(out.spinDirB);
     }
   }
   return out;

@@ -40,6 +40,8 @@ export interface CollisionMessage {
   impulseY: number;
   /** 接触した時刻 (ホスト時刻 ms)。受信時に 250ms 以上前なら適用しない */
   time: number;
+  /** 受け取る側がスピンする向き (+1 = 時計回り、-1 = 反時計回り)。0 または省略ならスピンしない */
+  spin?: number;
 }
 
 export type ClientMessage = JoinMessage | ReadyMessage | CollisionMessage;
@@ -123,6 +125,10 @@ export interface ResultEntry {
   /** ゴールタイム (秒、ペナルティ込み)。ゴールしていなければ null */
   totalTime: number | null;
   bestLap: number | null;
+  /** 終えた周回数 */
+  lapsCompleted: number;
+  /** ペナルティ (秒、フライングで +3) */
+  penalty: number;
 }
 
 export interface ResultMessage {
@@ -177,11 +183,11 @@ function isSettings(v: unknown): v is LobbySettings {
 
 function isResultEntry(v: unknown): v is ResultEntry {
   return isObj(v) && isPlayerId(v.playerId) && isInt(v.position, 1, 8) && isOneOf(v.status, resultStatuses)
-    && isNumOrNull(v.totalTime) && isNumOrNull(v.bestLap);
+    && isNumOrNull(v.totalTime) && isNumOrNull(v.bestLap) && isInt(v.lapsCompleted, 0, 999) && isNum(v.penalty);
 }
 
 function isCollision(v: Obj): boolean {
-  return isPlayerId(v.other) && isNum(v.impulseX) && isNum(v.impulseY) && isNum(v.time);
+  return isPlayerId(v.other) && isNum(v.impulseX) && isNum(v.impulseY) && isNum(v.time) && (v.spin === undefined || isInt(v.spin, -1, 1));
 }
 
 function parseJson(text: string): Obj | null {

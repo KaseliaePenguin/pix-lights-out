@@ -1,6 +1,6 @@
 import type { Car } from './Car';
 import type { ContactOutcome, ContactResult } from './carContact';
-import { detectContact, resolveContact } from './carContact';
+import { createContactOutcome, detectContact, resolveContact } from './carContact';
 
 /** 車同士の接触 1 件 (演出用。衝撃がなく押し戻しだけのものは出さない) */
 export interface CarContactEvent {
@@ -31,7 +31,7 @@ const passes = 3;
 export class ContactSystem {
   private readonly lastImpact: Float64Array;
   private readonly contact: ContactResult = { depth: 0, nx: 0, ny: 0, x: 0, y: 0 };
-  private readonly outcome: ContactOutcome = { impact: 0, isAAttacker: false, isBAttacker: false, spinA: false, spinB: false };
+  private readonly outcome: ContactOutcome = createContactOutcome();
   private readonly pool: CarContactEvent[] = [];
   private readonly events: CarContactEvent[] = [];
 

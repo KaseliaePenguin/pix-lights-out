@@ -1,7 +1,9 @@
 // ヘッドレスの確認: オンライン対戦の通信部品 (src/shared/net/、src/net/LoopbackTransport.ts) を node で動かして確かめる。
 //   node scripts/sim-net.mjs
 // 招待・返答コードの往復 (Chrome・Firefox 形式の SDP)、コードの長さ、壊れたコードの判定、バイナリ形式、
-// LoopbackTransport での ping / pong と時刻合わせ。WebRTC そのものはブラウザでしか確かめられない。
+// LoopbackTransport での ping / pong と時刻合わせ、RaceHost + NetClientSession でのオンラインの決勝
+// (CPU の運転で全員が完走、接触の中継、状態が届かない車のゴースト・リタイア、切断、ホストの終了、不正対策)。
+// WebRTC そのものと Worker はブラウザでしか確かめられない。
 // TypeScript を esbuild (vite に同梱) でまとめてから読み込む (sim-lap.mjs と同じ方法)。ゲーム本体では使わない。
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +22,16 @@ export * from './src/shared/net/stateCodec';
 export { StateSequencer } from './src/shared/net/StateSequencer';
 export { ClockSync } from './src/shared/net/ClockSync';
 export { LoopbackNetwork } from './src/net/LoopbackTransport';
+export { RaceHost } from './src/host/RaceHost';
+export { NetClientSession } from './src/net/NetClientSession';
+export { RateLimiter } from './src/shared/net/RateLimiter';
+export { Track } from './src/shared/Track';
+export { course1 } from './src/shared/tracks/course1';
+export { RacingLine } from './src/shared/RacingLine';
+export { CpuDriver, createCpuSurroundings } from './src/shared/CpuDriver';
+export { carParams, raceRules } from './src/shared/carParams';
+export { createControls } from './src/shared/controls';
+export { Random } from './src/shared/Random';
 `;
 const bundle = await build({
   stdin: { contents: entry, resolveDir: root, loader: 'ts' },
@@ -339,8 +351,8 @@ console.log('\n== メッセージの形の確認 ==');
     { type: 'reject', reason: 'full' },
     { type: 'raceStart', session: 'race', startTime: 1.7e12, settings, grid: [0, 2], seed: 99 },
     { type: 'raceEvent', event: 'lap', playerId: 2, time: 1.7e12, lap: 3, value: 37.25 },
-    { type: 'result', session: 'race', entries: [{ playerId: 2, position: 1, status: 'finished', totalTime: 190.5, bestLap: 37.1 }] },
-    { type: 'collision', other: 2, impulseX: 10, impulseY: -5, time: 1.7e12 },
+    { type: 'result', session: 'race', entries: [{ playerId: 2, position: 1, status: 'finished', totalTime: 190.5, bestLap: 37.1, lapsCompleted: 5, penalty: 0 }] },
+    { type: 'collision', other: 2, impulseX: 10, impulseY: -5, time: 1.7e12, spin: -1 },
     { type: 'hostClosed' },
   ];
   check(good.every((g) => m.parseHostMessage(JSON.stringify(g)) !== null), 'ホスト → 参加者の正しいメッセージを通す');
@@ -498,6 +510,272 @@ console.log('\n== LoopbackTransport: 応答がないときの切断 ==');
   check(left.includes('2:timeout') && !left.some((l) => l.startsWith('1:')), '10 秒 pong が返らない参加者を切断 (onPeerLeave(timeout))', left.join(','));
   check(closes.length === 1 && (closes[0] === 'timeout' || closes[0] === 'connectionFailed'), '切られた参加者にも onClose が届く', closes.join(','));
   check(alive.isClockSynced && Math.abs(alive.hostNow() - net.host.now()) < 1, 'ほかの参加者は影響を受けない');
+}
+
+console.log('\n== RateLimiter ==');
+{
+  const r = new m.RateLimiter(60);
+  let dropped = 0;
+  for (let t = 0; t < 12000; t += 5) if (!r.allow(t)) dropped++; // 200 回/秒
+  check(dropped > 0 && r.isOverFor(12000, 10000), '上限を超える状態が 10 秒続くと isOverFor');
+  const q = new m.RateLimiter(60);
+  for (let t = 0; t < 12000; t += 5) if (Math.floor(t / 1000) % 2 === 0) q.allow(t); // 超える秒と何も来ない秒が交互
+  check(!q.isOverFor(12000, 10000), '途切れたら数え直す');
+}
+
+// ---------------------------------------------------------------- オンラインの決勝 (RaceHost + NetClientSession)
+const track = new m.Track(m.course1);
+const racingLine = new m.RacingLine(track, { tyreGrip: m.carParams.compoundGrip.soft, params: m.carParams });
+const dtStep = m.raceRules.step;
+
+/** ホスト (RaceHost を LoopbackNetwork の host に直接つなぐ) と参加者 (CPU が自車を運転する) */
+function createRaceWorld({ seed, profiles, laps = 3, latencyMs = 30, jitterMs = 50, lossRate = 0.05 }) {
+  const clock = new VirtualClock();
+  const net = new m.LoopbackNetwork({ clock, latencyMs, jitterMs, lossRate, seed });
+  const relayed = [];
+  const sendEvent = net.host.sendEvent.bind(net.host);
+  net.host.sendEvent = (id, msg) => {
+    if (msg.type === 'collision') relayed.push({ to: id, from: msg.other });
+    sendEvent(id, msg);
+  };
+  const host = new m.RaceHost({ transport: net.host, clock, track, laps, createSeed: () => seed * 7919 });
+  const warnings = [];
+  host.onWarning = (id, detail) => warnings.push(`${id}:${detail}`);
+  const players = profiles.map((p, i) => {
+    const transport = net.connect(p.link ?? {});
+    const session = new m.NetClientSession(transport, { name: p.name, team: p.team }, track);
+    const driver = new m.CpuDriver(racingLine, track, p.difficulty ?? 'normal', new m.Random(seed * 31 + i), m.carParams.compoundGrip.soft);
+    const player = { ...p, transport, session, driver, controls: m.createControls(), env: m.createCpuSurroundings(8), events: [], paused: false, lightsOutHostTime: null };
+    session.onRaceStart = () => { player.events.length = 0; };
+    return player;
+  });
+  return { clock, net, host, players, relayed, warnings };
+}
+
+/** 1/60 秒進めて、全員の自車を CPU で運転する */
+function driveStep(w, beforeStep) {
+  w.clock.advance(1000 / 60);
+  for (const p of w.players) {
+    const race = p.session.race;
+    // 接続が切れたあとも step を呼ぶ (connectionLost は step で返る)
+    if (!race || p.paused) continue;
+    const self = race.player;
+    const env = p.env;
+    let n = 0;
+    for (const rc of race.cars) if (rc !== self && race.isOnTrack(rc) && !race.isGhostPair(self.index, rc.index)) env.others[n++] = rc.car;
+    env.othersCount = n;
+    env.canDrive = race.phase === 'racing' && self.status !== 'retired';
+    env.timeSinceStart = race.time - race.lightsOutAt;
+    env.wantsReset = self.lap.isWrongWay || self.lap.isCheckpointMissed;
+    p.driver.update(self.car, env, dtStep, p.controls);
+    beforeStep?.(p, race);
+    for (const e of race.step(p.controls, dtStep)) {
+      if (e.type === 'lap' && e.event.type === 'timingLine') continue;
+      p.events.push({ ...e, raceTime: race.raceTime });
+      if (e.type === 'resetPlaced') p.driver.resetTracking();
+      if (e.type === 'lightsOut') p.lightsOutHostTime = race.hostNow();
+    }
+  }
+}
+
+const hasEvent = (p, pred) => p.events.some(pred);
+const fmtTime = (t) => (t == null ? '-' : `${Math.floor(t / 60)}:${(t % 60).toFixed(3).padStart(6, '0')}`);
+
+console.log('\n== オンラインの決勝: ロビー ==');
+const worldA = createRaceWorld({
+  seed: 11,
+  profiles: [
+    // ホスト本人 (LocalTransport 相当: 遅延なし)
+    { name: 'HOST', team: 1, link: { latencyMs: 0, jitterMs: 0, lossRate: 0 } },
+    { name: 'AAA', team: 2 },
+    { name: 'BBB', team: 5 },
+    { name: 'CCC', team: 8 },
+  ],
+});
+{
+  const w = worldA;
+  w.clock.advance(2000);
+  const ids = w.players.map((p) => p.session.playerId);
+  check(w.players.every((p) => p.session.state === 'lobby' && p.session.players.length === 4) && new Set(ids).size === 4,
+    '4 人が join してロビーに入り、全員に参加者一覧が届く', ids.join(','));
+  check(w.players.every((p) => p.session.transport.isClockSynced), '全員の時刻合わせが済んでいる');
+
+  // 名前・チームの重複、バージョン違い
+  const extra = w.net.connect();
+  const got = [];
+  let extraClosed = null;
+  extra.onEvent = (msg) => got.push(msg.type === 'reject' ? `reject:${msg.reason}` : msg.type);
+  extra.onClose = (r) => { extraClosed = r; };
+  extra.sendEvent({ type: 'join', protocolVersion: m.protocolVersion, name: 'AAA', team: 3 });
+  extra.sendEvent({ type: 'join', protocolVersion: m.protocolVersion, name: 'DDD', team: 2 });
+  extra.sendEvent({ type: 'join', protocolVersion: m.protocolVersion, name: 'dd', team: 3 });
+  w.clock.advance(500);
+  check(got.join(',') === 'reject:nameTaken,reject:teamTaken,reject:invalidName', '名前の重複・チームの重複・名前の規則違反を拒否 (接続は切らない)', got.join(','));
+  extra.sendEvent({ type: 'join', protocolVersion: m.protocolVersion + 1, name: 'DDD', team: 3 });
+  w.clock.advance(2000);
+  check(got.includes('reject:version') && extraClosed !== null, 'バージョン違いは拒否して切断', `${got.at(-1)} / ${extraClosed}`);
+  check(w.players.every((p) => p.session.players.length === 4), '拒否した相手は参加者一覧に入らない');
+
+  check(w.host.startRace() === 'notReady', '全員が準備完了でなければ始められない');
+  w.host.setLaps(3);
+  for (const p of w.players) p.session.setReady(true, 'soft');
+  w.clock.advance(300);
+  check(w.players.every((p) => p.session.players.every((q) => q.isReady)), '準備完了が全員の一覧に反映される');
+}
+
+console.log('\n== オンラインの決勝: 3 周 (遅延 30〜80 ms、ロス 5%、4 台) ==');
+{
+  const w = worldA;
+  const [hostP, aaa, bbb, ccc] = w.players;
+  check(w.host.startRace() === 'ok', 'ホストがレースを始める');
+  w.clock.advance(300);
+  check(w.players.every((p) => p.session.state === 'race' && p.session.race), '全員に raceStart が届く');
+  const grids = w.players.map((p) => p.session.race.entries.map((e) => e.playerId).join(''));
+  check(new Set(grids).size === 1, '全員のグリッドが同じ', grids[0]);
+
+  let deviation = null;
+  let gaps = null;
+  let teleportSent = false;
+  let steps = 0;
+  const maxSteps = 60 * 400;
+  while (steps++ < maxSteps) {
+    driveStep(w, (p, race) => {
+      // BBB: 消灯の 0.3 秒前にアクセルを踏む (フライング)
+      if (p === bbb && race.phase === 'grid' && race.time > race.lightsOutAt - 0.3) p.controls.throttle = 1;
+    });
+    const race = hostP.session.race;
+    const t = race.raceTime;
+    // CCC: 20〜25 秒の間、タブを裏に回したつもりで止める (状態が届かない → 3 秒でゴースト)
+    ccc.paused = t >= 20 && t < 25;
+    // AAA: 60 秒で切断
+    if (t >= 60 && !aaa.left) {
+      aaa.left = true;
+      aaa.paused = true;
+      aaa.session.leave();
+    }
+    // CCC から瞬間移動の状態を 1 回送る (ホストは捨てて警告)
+    if (t >= 40 && !teleportSent) {
+      teleportSent = true;
+      const fake = m.createCarNetState(ccc.session.playerId);
+      const real = ccc.session.race.player.car;
+      Object.assign(fake, { x: real.x + 3000, y: real.y, heading: real.heading, sF: 400, lap: 1, checkpoint: 0 });
+      ccc.transport.sendState(m.encodeCarState(ccc.session.race.hostNow(), fake));
+    }
+    // 50 秒の時点で、ホストの画面の順位表の差 (前の車との差が秒で出ている)
+    if (gaps === null && t >= 50) {
+      gaps = race.order.slice(1).filter((rc) => rc.status === 'racing').map((rc) => rc.gapToAhead);
+    }
+    // 30 秒の時点で、ホストの画面の BBB の表示位置と BBB 本人の位置のずれ
+    if (deviation === null && t >= 30) {
+      const shown = race.carByPlayerId(bbb.session.playerId).car;
+      const real = bbb.session.race.player.car;
+      deviation = Math.hypot(shown.x - real.x, shown.y - real.y);
+    }
+    const running = w.players.filter((p) => !p.left);
+    if (running.every((p) => p.session.race.phase === 'finished')) break;
+  }
+  const remaining = [hostP, bbb, ccc];
+  const results = remaining.map((p) => JSON.stringify(p.session.race.resultEntries));
+  console.log(`  ${(steps / 60).toFixed(1)} 秒で終了`);
+  for (const r of hostP.session.race.results) {
+    console.log(`    ${r.position}. ${hostP.session.race.nameOf(r.carNumber).padEnd(4)} #${r.carNumber} ${r.status.padEnd(12)} 周 ${r.lapsCompleted} 合計 ${fmtTime(r.totalTime)} ベスト ${fmtTime(r.bestLap)} ペナルティ ${r.penalty}`);
+  }
+  check(remaining.every((p) => p.session.race.phase === 'finished'), '残った全員に結果が届く (レースが最後まで進む)');
+  check(new Set(results).size === 1 && results[0] === JSON.stringify(w.host.judge.results), '全員の結果がホストの確定結果と一致');
+  const entries = hostP.session.race.resultEntries ?? [];
+  const byId = (id) => entries.find((e) => e.playerId === id);
+  check([hostP, bbb, ccc].every((p) => byId(p.session.playerId)?.status === 'finished' && byId(p.session.playerId)?.lapsCompleted === 3), '走り続けた 3 人は 3 周を完走');
+  check(byId(aaa.session.playerId)?.status === 'retired', '途中で切断した AAA はリタイア');
+  const winner = entries.find((e) => e.position === 1);
+  check(winner && winner.totalTime > 100 && winner.totalTime < 140, '優勝タイムが 3 周の目安 (100〜140 秒)', fmtTime(winner?.totalTime));
+  check(byId(bbb.session.playerId)?.penalty === 3 && remaining.every((p) => hasEvent(p, (e) => e.type === 'jumpStart' && e.carNumber === 5)),
+    'BBB のフライング: 結果に +3 秒、全員に jumpStart');
+  const lightsOut = w.players.map((p) => p.lightsOutHostTime);
+  const spread = Math.max(...lightsOut) - Math.min(...lightsOut);
+  check(spread < 40, '全員の消灯がホスト時刻でそろう', `ずれ ${spread.toFixed(1)} ms`);
+  check(remaining.filter((p) => p !== ccc).every((p) => hasEvent(p, (e) => e.type === 'carGhosted' && e.carNumber === 8) && hasEvent(p, (e) => e.type === 'carUnghosted' && e.carNumber === 8)),
+    '状態が 3 秒届かない CCC はゴーストになり、戻ると通常に戻る');
+  check([hostP, bbb, ccc].every((p) => hasEvent(p, (e) => e.type === 'carDisconnected' && e.carNumber === 2) && hasEvent(p, (e) => e.type === 'retired' && e.carNumber === 2)),
+    '切断した AAA を全員がリタイアとして受け取り、レースは続く');
+  check(w.warnings.length >= 1 && w.warnings.every((x) => x.startsWith(`${ccc.session.playerId}:`)), 'ありえない移動の状態は捨てて警告', w.warnings[0] ?? '');
+  check(deviation !== null && deviation < 150, '他車の表示位置のずれ (補間の遅れ + 遅延ぶん)', `${deviation?.toFixed(1)} px`);
+  check(gaps !== null && gaps.length > 0 && gaps.every((g) => (g.kind === 'time' && g.seconds >= 0 && g.seconds < 20) || g.kind === 'laps'),
+    '順位表の前の車との差が出る (タイミングラインの通過時刻から)', (gaps ?? []).map((g) => (g.kind === 'time' ? `+${g.seconds.toFixed(3)}` : g.kind)).join(' '));
+
+  const detected = w.players.reduce((s, p) => s + p.session.race.stats.contactsDetected, 0);
+  const applied = w.players.reduce((s, p) => s + p.session.race.stats.collisionsApplied, 0);
+  const duplicate = w.players.reduce((s, p) => s + p.session.race.stats.collisionsDuplicate, 0);
+  const tooOld = w.players.reduce((s, p) => s + p.session.race.stats.collisionsTooOld, 0);
+  console.log(`  接触: 自分で検出 ${detected} / 中継 ${w.relayed.length} / 相手で適用 ${applied}・自分でも検出済み ${duplicate}・古すぎ ${tooOld}`);
+  check(detected > 0 && w.relayed.length > 0, '接触が起き、collision がホスト経由で相手に中継される');
+  check(applied + duplicate > 0 && applied + duplicate + tooOld <= w.relayed.length, '中継された接触が相手の車に反映される (適用、または相手も検出済みで二重適用なし)');
+  const sent = w.players.map((p) => p.session.race.stats.statesSent / Math.max(1, p.session.race.time));
+  check(sent.every((r) => r > 20 && r <= 31), 'carState を約 30 回/秒で送る', sent.map((r) => r.toFixed(1)).join(', '));
+  const snaps = remaining.map((p) => p.session.race.stats.snapshotsReceived / p.session.race.time);
+  check(snaps.every((r) => r > 25 && r <= 31), 'スナップショットを約 30 回/秒で受ける (ロス 5%)', snaps.map((r) => r.toFixed(1)).join(', '));
+
+  w.clock.advance(500);
+  check(w.host.phase === 'lobby' && remaining.every((p) => p.session.state === 'lobby' && p.session.players.length === 3 && p.session.players.every((q) => !q.isReady)),
+    'レース後はロビーに戻り、準備完了が戻る (接続は保つ)');
+  w.host.close();
+  w.clock.advance(500);
+  check(remaining.every((p) => p.session.state === 'closed' && p.session.closeReason === 'hostClosed'), 'ホストが閉じると全員が hostClosed を検出');
+}
+
+console.log('\n== オンラインの決勝: リタイア・不正な頻度・ホストの異常終了 ==');
+{
+  const w = createRaceWorld({
+    seed: 23, laps: 3, latencyMs: 20, jitterMs: 20, lossRate: 0.02,
+    profiles: [{ name: 'HOST', team: 3 }, { name: 'SLEEP', team: 4 }, { name: 'SPAM', team: 6 }],
+  });
+  const [hostP, sleep, spam] = w.players;
+  w.clock.advance(2000);
+  for (const p of w.players) p.session.setReady(true, 'soft');
+  w.clock.advance(300);
+  check(w.host.startRace() === 'ok', 'レース開始');
+  w.clock.advance(300);
+  sleep.paused = true; // 最初から状態を送らない (接続は生きている)
+  let crashedAt = null;
+  let abortedAt = null;
+  for (let steps = 0; steps < 60 * 90; steps++) {
+    driveStep(w, (p, race) => {
+      // SPAM: 5 秒から毎フレーム 3 回ずつ余計に送る (180 回/秒)
+      if (p === spam && race.raceTime > 5) for (let k = 0; k < 3; k++) p.transport.sendState(m.encodeCarState(race.hostNow(), m.createCarNetState(p.session.playerId)));
+    });
+    const race = hostP.session.race;
+    if (crashedAt === null && race.raceTime >= 66) {
+      crashedAt = w.clock.now();
+      w.host.dispose(); // hostClosed を送らずに止まる
+    }
+    if (crashedAt !== null && abortedAt === null && race.phase === 'aborted') abortedAt = w.clock.now();
+    if (abortedAt !== null) break;
+  }
+  const race = hostP.session.race;
+  const sleepCar = race.carByPlayerId(sleep.session.playerId);
+  check(hasEvent(hostP, (e) => e.type === 'carGhosted' && e.carNumber === 4), '状態を送らない車は 3 秒でゴースト');
+  const retiredAt = hostP.events.find((e) => e.type === 'retired' && e.carNumber === 4)?.raceTime;
+  check(sleepCar.status === 'retired' && !hasEvent(hostP, (e) => e.type === 'carDisconnected' && e.carNumber === 4), '60 秒届かなければリタイア (接続は切らない)', `消灯から ${retiredAt?.toFixed(1)} 秒`);
+  check(sleep.session.state !== 'closed' || sleep.session.closeReason === 'timeout', 'SLEEP の接続は保たれている (ホストが落ちるまで)');
+  const spamKick = hostP.events.find((e) => e.type === 'carDisconnected' && e.carNumber === 6)?.raceTime;
+  check(spamKick !== undefined && spamKick > 14 && spamKick < 18, 'state を上限 (60 回/秒) を超えて送り続けた参加者は 10 秒で切断', `消灯から ${spamKick?.toFixed(1)} 秒`);
+  check(abortedAt !== null && race.abortReason === 'noSnapshot' && abortedAt - crashedAt >= 3000 && abortedAt - crashedAt < 3200,
+    'ホストが落ちたら 3 秒スナップショットが届かないことで検出', abortedAt === null ? '未検出' : `${(abortedAt - crashedAt).toFixed(0)} ms`);
+  check(hasEvent(hostP, (e) => e.type === 'connectionLost' && e.reason === 'noSnapshot') && hostP.session.state === 'closed', 'connectionLost が出てセッションも閉じる');
+}
+
+console.log('\n== オンラインの決勝: レース中にホストが閉じる ==');
+{
+  const w = createRaceWorld({ seed: 5, profiles: [{ name: 'HOST', team: 1 }, { name: 'P2P', team: 2 }, { name: 'P3P', team: 3 }] });
+  w.clock.advance(2000);
+  for (const p of w.players) p.session.setReady(true, 'soft');
+  w.clock.advance(300);
+  w.host.startRace();
+  for (let steps = 0; steps < 60 * 15; steps++) driveStep(w);
+  const closedAt = w.clock.now();
+  w.host.close();
+  for (let steps = 0; steps < 30; steps++) driveStep(w);
+  check(w.players.every((p) => p.session.race.phase === 'aborted' && p.session.race.abortReason === 'hostClosed' && hasEvent(p, (e) => e.type === 'connectionLost')),
+    '全員が hostClosed を受けてレースを止める', `${(w.clock.now() - closedAt).toFixed(0)} ms 以内`);
 }
 
 console.log(failures === 0 ? '\nすべての確認が OK' : `\nNG が ${failures} 件`);
