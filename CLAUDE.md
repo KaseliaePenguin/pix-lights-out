@@ -4,7 +4,8 @@
 
 **PIX LIGHTS OUT** — トップダウン視点の F1 風レースゲーム (タイトルは F1 のスタート「lights out」+ ピクセルアートの PIX。表記は常に 3 語セット)。TypeScript + Canvas 2D で作るブラウザゲームで、外部ゲームエンジンは使わず、ゲームループ・シーン管理・入力処理を `src/core/` に自前で実装している。
 
-- オンライン対戦あり: P2P のホスト・クライアント方式で、ブラウザ同士を WebRTC DataChannel でつなぐ。接続情報はコードのコピペで手渡しし、自前のサーバーは立てない (NAT 越えは公開 STUN のみ)。接続方式は `docs/design/network.md`
+- オンライン対戦あり: P2P のホスト・クライアント方式で、ブラウザ同士を WebRTC DataChannel でつなぐ。接続情報は共通の招待リンクを開くだけで、Cloudflare Workers の中継 (`signaling/`、暗号化して受け渡すだけ) を通して自動で交換する。中継が使えないときは招待コード・返答コードのコピペに切り替わる。NAT 越えは公開 STUN のみ (TURN なし)。接続方式は `docs/design/network.md`
+- 公開: https://kaseliaepenguin.github.io/pix-lights-out/ (GitHub Pages。main に push すると `.github/workflows/deploy-pages.yml` で自動公開)。中継は `signaling/` で `npx wrangler deploy` (手動)
 - アートスタイルはピクセルアート。画像・BGM・SE はすべてローカルの AI で生成する
 
 実装の基本:
@@ -20,12 +21,15 @@ src/
   main.ts       エントリーポイント (アセットを読み込んでからタイトルを出す)
   assetList.ts  読み込む画像・音声・データの一覧と、SE ごとの基準音量
   core/         エンジン層: Game / Input / Scene、カメラ・ワールド層、アセット、オーディオ、セーブ
-  shared/       DOM に依存しない純粋な計算: 車の物理、コース、周回判定、ゴースト、TimeAttackSession (M4 でホストの Web Worker とも共有)
+  shared/       DOM に依存しない純粋な計算: 車の物理、コース、周回判定、ゴースト、レース進行 (RaceSession)、CPU。shared/net/ は通信の形式・判定 (ホストの Web Worker とも共有)
+  net/          ブラウザ側の通信: Transport、WebRTC (PeerLink)、中継のクライアント、オンラインのレース (NetRaceClient)
+  host/         ホストだけで動く部分: Web Worker (hostWorker・RaceHost)、中継 (HostRelay)、ロビー (HostLobby)
   render/       コース・タイヤ痕・車の描画
   scenes/       画面ごとのシーン (TitleScene, MenuScene, TimeAttackScene など)
   ui/           HUD・メニューの描画部品 (ビットマップフォントなど)
   entities/     パーティクルなど、描画用のゲームオブジェクト
-public/assets/  画像・音声・データの静的アセット (実行時は /assets/... で参照)
+public/assets/  画像・音声・データの静的アセット (実行時は import.meta.env.BASE_URL + assets/... で参照。GitHub Pages のサブパスで動くよう相対パス)
+signaling/      接続用の中継 (Cloudflare Workers + Durable Objects)。ゲーム本体とは別の package.json
 promo/          宣伝用の一枚絵 (ゲーム内では使わない。scripts/build-promo.mjs で作り直せる)
 ```
 
@@ -46,6 +50,7 @@ npm run build      # 型チェック + 本番ビルド (dist/)
 npm run preview    # ビルド結果の確認
 npm run dashboard  # Claude 利用状況ダッシュボード (http://127.0.0.1:5190)
 node scripts/sim-lap.mjs  # 物理・周回判定のヘッドレス確認 (AI の周回、壁の突き抜け、ゴースト)。src/shared/ を変えたら通す
+node scripts/sim-net.mjs  # 通信・オンライン対戦のヘッドレス確認 (招待リンク・コード、暗号化、ホストの判定、4 人レース)。src/shared/net/・src/net/・src/host/ を変えたら通す
 ```
 
 開発時は `http://localhost:5173/?scene=timeattack` で走行画面から始められる。
