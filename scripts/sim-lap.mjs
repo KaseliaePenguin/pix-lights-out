@@ -986,8 +986,23 @@ console.log('\n== 車同士の接触 (単体) ==');
   const jump = evs.filter((e) => e.type === 'jumpStart');
   check(maxMove === 0 && jump.length === 0 && session.player.penalty === 0, '消灯までアクセルを踏んでも動かず、フライングにならない', `消灯前の移動 ${maxMove.toFixed(2)} px`);
   c.steerInput = 0;
+  // 踏みっぱなしで消灯 → 離すまで動かない (反応時間 0 で出られないように)
+  const heldEvents = [];
+  for (let i = 0; i < 30; i++) for (const e of session.step(c, dt)) heldEvents.push(e);
+  const heldSpeed = session.player.car.sF;
+  check(session.player.isLaunchBlocked && heldSpeed === 0 && session.player.reactionTime === null && !heldEvents.some((e) => e.type === 'reaction' && e.carNumber === 1),
+    '踏んだまま消灯すると、離すまで発進できず反応時間も付かない', `0.5 秒後 ${heldSpeed.toFixed(0)} px/秒`);
+  // 離して踏み直すと発進し、反応時間は踏み直した瞬間から数える
+  c.throttle = 0;
+  session.step(c, dt);
+  const released = !session.player.isLaunchBlocked;
+  c.throttle = 1;
+  const pressedAt = session.time - session.lightsOutAt;
   for (let i = 0; i < 30; i++) session.step(c, dt);
-  check(session.player.car.sF > 0, '消灯後はアクセルで発進できる', `0.5 秒後 ${session.player.car.sF.toFixed(0)} px/秒`);
+  const reaction = session.player.reactionTime;
+  check(released && session.player.car.sF > 0, '離して踏み直すと発進できる', `0.5 秒後 ${session.player.car.sF.toFixed(0)} px/秒`);
+  check(reaction !== null && Math.abs(reaction - pressedAt) < dt * 1.5 && reaction > 0.4, '反応時間は踏み直した瞬間から (消灯からの時間)',
+    `${reaction?.toFixed(3)} 秒 (踏み直し ${pressedAt.toFixed(3)} 秒)`);
   check(session.player.gridSlot === session.cars.length - 1, '予選スキップではプレイヤーが最後尾');
   // プレイヤーがリタイアすると、その場で結果が確定する (CPU は推定)
   session.retire(1);

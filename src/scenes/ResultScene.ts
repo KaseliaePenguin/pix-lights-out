@@ -9,9 +9,10 @@ import { displayAbbr } from '../ui/teams';
 import { drawText } from '../ui/text';
 import { MenuScene } from './MenuScene';
 import {
+  afterRaceInputDelay,
   moveMenuCursor,
+  wasAfterRaceConfirmPressed,
   wasMenuBackPressed,
-  wasMenuConfirmPressed,
   wasMenuDownPressed,
   wasMenuUpPressed,
 } from './menuKeys';
@@ -39,6 +40,8 @@ const tableTop = 112;
 export class ResultScene implements Scene {
   private selected = 0;
   private readonly playerResult: RaceResult | null;
+  /** 表示してから入力を受け付けるまでの残り (秒) */
+  private inputDelay = afterRaceInputDelay;
 
   constructor(
     private readonly game: Game,
@@ -52,7 +55,11 @@ export class ResultScene implements Scene {
     this.game.audio.playBgm('result-theme');
   }
 
-  update(): void {
+  update(dt: number): void {
+    if (this.inputDelay > 0) {
+      this.inputDelay -= dt;
+      return;
+    }
     const { input, audio } = this.game;
     if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, items.length);
@@ -60,7 +67,7 @@ export class ResultScene implements Scene {
     } else if (wasMenuDownPressed(input)) {
       this.selected = moveMenuCursor(this.selected, 1, items.length);
       audio.playSe('ui-cursor');
-    } else if (wasMenuConfirmPressed(input)) {
+    } else if (wasAfterRaceConfirmPressed(input)) {
       this.confirm(items[this.selected]);
     } else if (wasMenuBackPressed(input)) {
       this.confirm('menu');

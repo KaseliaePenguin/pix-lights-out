@@ -18,6 +18,7 @@ import { drawParagraph } from '../ui/paragraph';
 import { teamOf } from '../ui/teams';
 import { drawText } from '../ui/text';
 import { getCourseTrack } from './courseCache';
+import { clearInviteHandler, setInviteHandler } from './inviteRouter';
 import { LobbyUi } from './LobbyUi';
 import { alternativeName, nextFreeTeam } from './lobbyRules';
 import { MenuScene } from './MenuScene';
@@ -148,8 +149,17 @@ export class GuestLobbyScene implements Scene {
     }
   }
 
+  /** 開いたまま招待リンクを開いた: 貼り付けの段階なら受け付け、ロビーの中なら知らせだけ */
+  private readonly onInvite = (code: string) => {
+    const phase = this.phase;
+    if (phase === 'paste') void this.acceptInvite(code);
+    else if (phase === 'joining' || phase === 'lobby') this.ui?.toast('YOU ARE IN A LOBBY. LEAVE IT FIRST, THEN OPEN THE INVITE LINK AGAIN.');
+    else void this.acceptInvite(code);
+  };
+
   enter(): void {
     this.game.audio.playBgm('menu-theme');
+    setInviteHandler(this.onInvite);
     this.ui = new LobbyUi(this.game, {
       onPaste: (text) => void this.acceptInvite(text),
       onNameCommit: (name) => this.commitName(name),
@@ -176,6 +186,7 @@ export class GuestLobbyScene implements Scene {
   }
 
   exit(): void {
+    clearInviteHandler(this.onInvite);
     this.ui?.destroy();
     this.ui = null;
     if (this.session) this.session.onChange = null;
@@ -516,6 +527,8 @@ export class GuestLobbyScene implements Scene {
     session.rejectReason = null;
     this.isAwaitingJoin = true;
     this.isReadySent = false;
+    // 応答待ちの時間は入り直すたびに数え直す (自動で入り直しを繰り返しても早く「応答がありません」にならないように)
+    this.joiningTime = 0;
     session.join(this.profile);
   }
 

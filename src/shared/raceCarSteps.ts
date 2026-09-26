@@ -40,12 +40,21 @@ const gridControls: Readonly<Controls> = {
   resetPressed: false,
 };
 
+/** 発進できない間に物理へ渡す入力 (アクセルだけ 0 にした写し) */
+const blockedControls: Controls = { ...gridControls };
+
 /** rc.controls を決めたあとに呼ぶ。反応時間、コース復帰、DRS、物理を 1 フレーム進める */
 export function driveRaceCar(rc: RaceCar, ctx: RaceCarStepContext): void {
   const car = rc.car;
   const events = ctx.events;
   if (!ctx.isStarted && (rc.controls.throttle > 0 || rc.controls.brake > 0)) rc.hasGridInput = true;
-  if (ctx.isStarted && rc.reactionTime === null && rc.controls.throttle > 0 && rc.status === 'racing') {
+  if (ctx.isStarted && !rc.isLaunchChecked) {
+    // 消灯の瞬間に踏んでいたら、離して踏み直すまで発進させない (反応時間も踏み直した瞬間から数える)
+    rc.isLaunchChecked = true;
+    if (rc.controls.throttle > 0 && rc.reactionTime === null) rc.isLaunchBlocked = true;
+  }
+  if (rc.isLaunchBlocked && rc.controls.throttle <= 0) rc.isLaunchBlocked = false;
+  if (ctx.isStarted && !rc.isLaunchBlocked && rc.reactionTime === null && rc.controls.throttle > 0 && rc.status === 'racing') {
     rc.reactionTime = Math.max(0, ctx.tPrev - ctx.lightsOutAt);
     events.push({ type: 'reaction', carNumber: rc.carNumber, time: rc.reactionTime });
   }
@@ -64,7 +73,15 @@ export function driveRaceCar(rc: RaceCar, ctx: RaceCarStepContext): void {
   if (rc.wasInDrsZone && !rc.drs.isInZone) rc.isDrsEligible = false;
   rc.wasInDrsZone = rc.drs.isInZone;
   // 消灯までは車を動かさない (グリッドでアクセルを踏んでも空ぶかしだけ)
-  car.update(ctx.isStarted ? rc.controls : gridControls, ctx.dt);
+  let controls: Readonly<Controls> = gridControls;
+  if (ctx.isStarted && rc.isLaunchBlocked) {
+    Object.assign(blockedControls, rc.controls);
+    blockedControls.throttle = 0;
+    controls = blockedControls;
+  } else if (ctx.isStarted) {
+    controls = rc.controls;
+  }
+  car.update(controls, ctx.dt);
   rc.gearbox.update(car.isSpinning ? car.speed : car.sF);
   if (rc.drs.enabledOnEntry) events.push({ type: 'drsEnabled', carNumber: rc.carNumber });
   if (car.drsOpened) events.push({ type: 'drsOpened', carNumber: rc.carNumber });

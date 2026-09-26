@@ -23,6 +23,16 @@ export function wasMenuConfirmPressed(input: Input): boolean {
   return input.wasPressed('Enter') || input.wasPressed('Space');
 }
 
+/**
+ * 走行の直後に出る画面 (リザルト、切断のダイアログ) の決定。Space は走行中に DRS で押しているので使わない
+ */
+export function wasAfterRaceConfirmPressed(input: Input): boolean {
+  return input.wasPressed('Enter') || input.wasPressed('NumpadEnter');
+}
+
+/** 走行の直後に出る画面が入力を受け付けるまでの時間 (秒)。走行中に押していたキーで読まずに進まないように */
+export const afterRaceInputDelay = 1;
+
 export function wasMenuBackPressed(input: Input): boolean {
   return input.wasPressed('Escape');
 }

@@ -20,6 +20,8 @@ export const netTexts = {
     'HOST: DO NOT CLOSE OR RELOAD THIS TAB DURING A RACE. IF YOU SWITCH TABS, THE RACE GOES ON BUT YOUR CAR STOPS.',
   hostRaceStart: 'HOST: KEEP THIS TAB IN FRONT',
   tabWasHidden: 'YOUR TAB WAS IN THE BACKGROUND, SO YOUR CAR STOPPED',
+  /** タブは前面のままなのに自車の状態がホストに届かなかった (回線の詰まり) */
+  connectionUnstable: 'CONNECTION UNSTABLE',
   connectionLost: 'THE CONNECTION TO THE HOST WAS LOST. THE RACE IS OVER.',
   hostClosedLobby: 'THE HOST CLOSED THE LOBBY.',
   lostInLobby: 'THE CONNECTION TO THE HOST WAS LOST.',

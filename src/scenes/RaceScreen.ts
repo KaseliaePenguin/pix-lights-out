@@ -349,11 +349,13 @@ export class RaceScreen {
     const lap = player.lap;
     m.setStatus('wrongWay', isRacing && lap.isWrongWay ? hudMessages.wrongWay() : null);
     m.setStatus('missedCheckpoint', isRacing && lap.isCheckpointMissed ? hudMessages.missedCheckpoint() : null);
-    const canReset = isRacing && source.isResetAvailable(player);
+    // 踏んだまま消灯して発進できない間は、復帰より「離して踏み直す」を知らせる
+    const canReset = isRacing && !player.isLaunchBlocked && source.isResetAvailable(player);
     m.setStatus('canReset', canReset ? hudMessages.pressToReset(isGamepad) : null);
     // 置き直したあとの操作不能の間だけカウントを出す (暗転中は出さない)
     const isCounting = isRacing && player.resetLockRemaining > 0 && player.screenFade < 1 && player.car.controlLocked;
     m.setStatus('reset', isCounting ? hudMessages.resetCount(player.resetLockRemaining) : null);
+    m.setStatus('launchBlocked', isRacing && player.isLaunchBlocked ? hudMessages.liftOff() : null);
   }
 
   // ---- 演出 ----
@@ -396,7 +398,7 @@ export class RaceScreen {
     this.sounds.update(car, player.gearbox, throttle);
     this.slipstreamSound?.set(car.fSlip);
     if (player.gearbox.shiftedUp) this.game.audio.playSe('gear-shift');
-    // グリッドでアクセルを踏んだ瞬間の空ぶかし (動けばフライング)
+    // グリッドでアクセルを踏んだ瞬間の空ぶかし (消灯まで車は動かない。踏んだまま消灯すると、離して踏み直すまで発進できない)
     const isGridThrottle = source.phase === 'grid' && controls.throttle > 0;
     if (isGridThrottle && !this.wasGridThrottle) this.game.audio.playSe('engine-rev');
     this.wasGridThrottle = isGridThrottle;

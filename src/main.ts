@@ -5,6 +5,7 @@ import { GuestLobbyScene } from './scenes/GuestLobbyScene';
 import { HostLobbyScene } from './scenes/HostLobbyScene';
 import { RaceScene } from './scenes/RaceScene';
 import { loadRaceSetup, newRaceSeed } from './scenes/raceSetup';
+import { routeInvite } from './scenes/inviteRouter';
 import { applyVolumeSettings, loadSettings } from './scenes/settingsStorage';
 import { TimeAttackScene } from './scenes/TimeAttackScene';
 import { TitleScene } from './scenes/TitleScene';
@@ -37,11 +38,39 @@ function takeInviteFromUrl(): string | null {
   return code;
 }
 
-const invite = takeInviteFromUrl();
-// ページを開いたままアドレス欄に招待リンクを貼ると、フラグメントだけが変わり読み込み直されない。読み込み直して参加画面に入る
-// (ホスト中なら hostGuard の確認が出る)
+/** Canvas の上に短い知らせを数秒出す (シーンが招待を受け取れないとき用) */
+function showPageNotice(text: string): void {
+  const el = document.createElement('div');
+  el.textContent = text;
+  el.dataset.testid = 'page-notice';
+  const s = el.style;
+  s.position = 'fixed';
+  s.left = '50%';
+  s.top = '12px';
+  s.transform = 'translateX(-50%)';
+  s.padding = '8px 14px';
+  s.background = colors.ink;
+  s.color = colors.yellow;
+  s.border = `2px solid ${colors.yellow}`;
+  s.fontFamily = 'Consolas, "Courier New", monospace';
+  s.zIndex = '20';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
+let invite = takeInviteFromUrl();
+let isLoaded = false;
+// ページを開いたままアドレス欄に招待リンクを貼ると、フラグメントだけが変わり読み込み直されない。
+// フラグメントはすぐ消し (再読み込みで同じ招待を使わない)、受け取れるシーン (タイトル・メニュー・参加画面) に渡す。
+// ロビー・レースの最中は読み込み直さず (接続が切れるため)、知らせだけ出す
 window.addEventListener('hashchange', () => {
-  if (inviteCodeFromHash(location.hash)) location.reload();
+  const code = takeInviteFromUrl();
+  if (!code) return;
+  if (!isLoaded) {
+    invite = code;
+    return;
+  }
+  if (!routeInvite(code)) showPageNotice('CANNOT JOIN NOW. FINISH OR LEAVE THE RACE / LOBBY, THEN OPEN THE INVITE LINK AGAIN.');
 });
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -74,5 +103,6 @@ void game.assets
   .finally(() => {
     // 読めなかったものは代用 (図形・代用フォント・無音) で続ける
     setUiFontImage(game.assets.getImage('ui-font-5x7'));
+    isLoaded = true;
     game.changeScene(firstScene());
   });

@@ -15,6 +15,8 @@ export const hudMessages = {
     color: colors.yellow,
     priority: 1,
   }),
+  /** 踏んだまま消灯した (離して踏み直すまで発進できない) */
+  liftOff: (): HudMessage => ({ text: 'LIFT OFF AND PRESS AGAIN', color: colors.yellow, priority: 1 }),
   // 優先度 2
   jumpStart: (): HudMessage => ({ text: 'JUMP START +3 SEC', color: colors.yellow, priority: 2 }),
   fastestLap: (abbr: string, lapTime: number): HudMessage => ({

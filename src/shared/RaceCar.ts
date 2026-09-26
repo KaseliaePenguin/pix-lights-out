@@ -100,6 +100,13 @@ export class RaceCar {
   finishOrder = -1;
   /** @internal 消灯前にアクセル・ブレーキを踏んだ (フライングの判定) */
   hasGridInput = false;
+  /**
+   * 消灯の瞬間にアクセルを踏んでいたので発進できない (一度離して踏み直すまで駆動 0。ブレーキ・ハンドルは効く)。
+   * 踏みっぱなしで消灯を待つと反応時間 0 で出られてしまうため
+   */
+  isLaunchBlocked = false;
+  /** @internal 消灯後の最初のフレームで isLaunchBlocked を判定した */
+  isLaunchChecked = false;
   /** @internal 結果を推定で決めた */
   isEstimated = false;
 

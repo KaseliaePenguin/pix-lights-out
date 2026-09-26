@@ -13,7 +13,7 @@ import { drawText } from '../ui/text';
 import { getCourseTrack } from './courseCache';
 import { DevAutopilot } from './devAutopilot';
 import { closeHostLobby } from './hostGuard';
-import { wasMenuBackPressed, wasMenuConfirmPressed } from './menuKeys';
+import { afterRaceInputDelay, wasAfterRaceConfirmPressed, wasMenuBackPressed } from './menuKeys';
 import { MenuScene } from './MenuScene';
 import { NetPauseScene } from './NetPauseScene';
 import { NetResultScene } from './NetResultScene';
@@ -30,6 +30,8 @@ const hostNoticeTime = 3;
 const hiddenNoticeMs = 3000;
 /** 同じ知らせを続けて出さない間隔 (秒) */
 const hiddenNoticeCooldown = 5;
+/** タブが前面に戻ってからこの時間 (ms) 内に自車がゴーストになったら、裏に回っていたせいとみなす */
+const hiddenCauseWindowMs = 5000;
 
 /**
  * オンラインの決勝 (network.md「同期方式」「切断時の扱い」)。描画・HUD・音は RaceScreen を 1 人用と共用する。
@@ -49,7 +51,13 @@ export class NetRaceScene implements Scene {
   private finishTimer = -1;
   private hostNoticeRemaining = 0;
   private isConnectionLost = false;
+  /** 切断のダイアログが入力を受け付けるまでの残り (秒) */
+  private dialogInputDelay = 0;
+  /** メニューからロビーを抜けた (同じフレームで古いレースを進めない) */
+  private hasLeft = false;
   private hiddenAt: number | null = null;
+  /** 裏に回っていたタブが前面に戻った時刻 (performance.now()) */
+  private shownAt = -Infinity;
   private hiddenNoticeRemaining = 0;
   private readonly onVisibility = () => this.handleVisibility();
   private readonly okRect = { x: 340, y: 330, w: 120, h: 28 };
@@ -60,6 +68,7 @@ export class NetRaceScene implements Scene {
     const x = ((e.clientX - r.left) / r.width) * canvas.width;
     const y = ((e.clientY - r.top) / r.height) * canvas.height;
     const o = this.okRect;
+    if (this.dialogInputDelay > 0) return;
     if (x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h) this.goToTitle();
   };
 
@@ -69,9 +78,10 @@ export class NetRaceScene implements Scene {
     private readonly race: NetRaceClient,
   ) {
     this.reader = ControlsReader.withKeyboard(game.input);
+    const abbrs = standingsAbbrs(race.cars.map((rc) => ({ carNumber: rc.carNumber, name: race.nameOf(rc.carNumber) })), race.player.carNumber);
     const labels: RaceScreenLabels = {
       nameTagOf: (rc) => race.nameOf(rc.carNumber),
-      abbrOf: (carNumber, isPlayer) => (isPlayer ? 'YOU' : race.nameOf(carNumber).slice(0, 3)),
+      abbrOf: (carNumber, isPlayer) => (isPlayer ? 'YOU' : (abbrs.get(carNumber) ?? race.nameOf(carNumber).slice(0, 3))),
       isOnTrack: (rc) => race.isOnTrack(rc),
     };
     this.screen = new RaceScreen(game, labels);
@@ -100,11 +110,14 @@ export class NetRaceScene implements Scene {
     }
     const { input } = this.game;
     if (this.isConnectionLost) {
-      if (wasMenuConfirmPressed(input) || wasMenuBackPressed(input)) this.goToTitle();
+      if (this.dialogInputDelay > 0) this.dialogInputDelay -= dt;
+      else if (wasAfterRaceConfirmPressed(input) || wasMenuBackPressed(input)) this.goToTitle();
       return;
     }
-    if (this.pause) this.pause.update(dt);
-    else if (this.finishTimer < 0 && wasMenuBackPressed(input)) this.openPause();
+    if (this.pause) {
+      this.pause.update(dt);
+      if (this.hasLeft) return;
+    } else if (this.finishTimer < 0 && wasMenuBackPressed(input)) this.openPause();
 
     // メニューを開いていても、他の人のレースは止めない (自分の車は操作できない)
     if (this.pause) clearControls(this.controls);
@@ -161,8 +174,11 @@ export class NetRaceScene implements Scene {
         this.onConnectionLost();
         return;
       case 'carGhosted':
-        // 自分の車の状態がホストに 3 秒届かなかった (タブが裏に回っていた)
-        if (e.carNumber === player.carNumber && this.hiddenAt === null) this.noticeTabWasHidden();
+        // 自分の車の状態がホストに 3 秒届かなかった。タブが裏に回っていた直後ならそのせい、前面のままなら回線の詰まり
+        if (e.carNumber === player.carNumber && this.hiddenAt === null) {
+          if (performance.now() - this.shownAt < hiddenCauseWindowMs) this.noticeTabWasHidden();
+          else this.noticeConnectionUnstable();
+        }
         return;
       case 'carUnghosted':
       case 'carDisconnected':
@@ -186,6 +202,7 @@ export class NetRaceScene implements Scene {
     }
     const hiddenAt = this.hiddenAt;
     this.hiddenAt = null;
+    if (hiddenAt !== null) this.shownAt = performance.now();
     if (hiddenAt !== null && performance.now() - hiddenAt >= hiddenNoticeMs) this.noticeTabWasHidden();
   }
 
@@ -195,9 +212,17 @@ export class NetRaceScene implements Scene {
     this.screen.messages.push({ text: netTexts.tabWasHidden, color: colors.yellow, priority: 2 });
   }
 
+  private noticeConnectionUnstable(): void {
+    if (this.hiddenNoticeRemaining > 0 || this.race.phase === 'finished' || this.race.player.status !== 'racing') return;
+    this.hiddenNoticeRemaining = hiddenNoticeCooldown;
+    this.screen.messages.push({ text: netTexts.connectionUnstable, color: colors.yellow, priority: 2 });
+  }
+
   private onConnectionLost(): void {
     if (this.isConnectionLost) return;
     this.isConnectionLost = true;
+    // 走行中に押していたキー (DRS の Space など) で読まずに閉じないように、少し待ってから受け付ける
+    this.dialogInputDelay = afterRaceInputDelay;
     this.pause = null;
     this.screen.stopSounds();
     this.game.audio.stopBgm(0.3);
@@ -229,6 +254,7 @@ export class NetRaceScene implements Scene {
       },
       onLeave: () => {
         this.pause = null;
+        this.hasLeft = true;
         this.leaveLink();
         game.changeScene(new MenuScene(game, 'multiplayer'));
       },
@@ -249,4 +275,34 @@ export class NetRaceScene implements Scene {
     drawParagraph(ctx, netTexts.connectionLost, x + 20, y + 44, w - 40, { color: colors.white, align: 'center' });
     drawButton(ctx, this.okRect, 'OK', true, true);
   }
+}
+
+/**
+ * 順位表の他車の略称 (3 文字)。名前の先頭 3 文字が他の人と重なるとき、または YOU (自車の表示) になるときは、
+ * 先頭 2 文字 + 番号にする。自車は呼び出し側で YOU にする
+ */
+export function standingsAbbrs(cars: readonly { carNumber: number; name: string }[], playerCarNumber: number): Map<number, string> {
+  const others = cars.filter((c) => c.carNumber !== playerCarNumber);
+  const counts = new Map<string, number>();
+  for (const c of others) counts.set(c.name.slice(0, 3), (counts.get(c.name.slice(0, 3)) ?? 0) + 1);
+  const result = new Map<number, string>();
+  const used = new Set<string>(['YOU']);
+  // 重ならないものを先に決める (番号付きの略称がそれと重ならないように)
+  for (const c of others) {
+    const abbr = c.name.slice(0, 3);
+    if (counts.get(abbr) === 1 && !used.has(abbr)) {
+      result.set(c.carNumber, abbr);
+      used.add(abbr);
+    }
+  }
+  for (const c of others) {
+    if (result.has(c.carNumber)) continue;
+    let abbr = '';
+    for (let n = 1; n <= 9 && (abbr === '' || used.has(abbr)); n++) abbr = c.name.slice(0, 2) + String(n);
+    // 9 まで埋まっていることは 8 台ではありえないが、念のため車番で
+    if (used.has(abbr)) abbr = `#${c.carNumber}`;
+    result.set(c.carNumber, abbr);
+    used.add(abbr);
+  }
+  return result;
 }

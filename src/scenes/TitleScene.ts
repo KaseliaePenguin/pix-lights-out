@@ -5,6 +5,8 @@ import { colors } from '../ui/colors';
 import { drawStartLamps, startLampsWidth } from '../ui/startLamps';
 import type { LampImages } from '../ui/startLamps';
 import { drawText, measureText } from '../ui/text';
+import { GuestLobbyScene } from './GuestLobbyScene';
+import { clearInviteHandler, setInviteHandler } from './inviteRouter';
 import { MenuScene } from './MenuScene';
 import { wasMenuConfirmPressed } from './menuKeys';
 
@@ -48,8 +50,16 @@ export class TitleScene implements Scene {
     this.traffic = paths && this.background ? new TitleTraffic(paths, (team) => assets.getImage(carSpriteName(team))) : null;
   }
 
+  /** 開いたまま招待リンクを開いたら、参加画面へ */
+  private readonly onInvite = (code: string) => this.game.changeScene(new GuestLobbyScene(this.game, null, code));
+
   enter(): void {
     this.game.audio.playBgm('menu-theme');
+    setInviteHandler(this.onInvite);
+  }
+
+  exit(): void {
+    clearInviteHandler(this.onInvite);
   }
 
   update(dt: number): void {

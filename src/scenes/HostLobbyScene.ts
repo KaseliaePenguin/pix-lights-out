@@ -17,6 +17,7 @@ import { teamOf } from '../ui/teams';
 import { drawText } from '../ui/text';
 import { getCourseTrack } from './courseCache';
 import { closeHostLobby, guardHostTab } from './hostGuard';
+import { clearInviteHandler, setInviteHandler } from './inviteRouter';
 import { LobbyUi } from './LobbyUi';
 import { moveMenuCursor, wasMenuBackPressed, wasMenuConfirmPressed, wasMenuDownPressed, wasMenuLeftPressed, wasMenuRightPressed, wasMenuUpPressed } from './menuKeys';
 import { MultiplayerScene } from './MultiplayerScene';
@@ -94,8 +95,15 @@ export class HostLobbyScene implements Scene {
     if (lobby) this.selected = items.indexOf('start');
   }
 
+  /** 開いたまま招待リンクを開いた (自分の招待を開いた場合など): ホスト中は参加できないので知らせだけ */
+  private readonly onInvite = () => {
+    this.game.audio.playSe('ui-error');
+    this.ui?.toast('YOU ARE HOSTING, SO YOU CANNOT JOIN ANOTHER LOBBY HERE. SEND THE INVITE LINK TO A FRIEND.');
+  };
+
   enter(): void {
     this.game.audio.playBgm('menu-theme');
+    setInviteHandler(this.onInvite);
     this.ui = new LobbyUi(this.game, {
       onPaste: (text) => void this.acceptReply(text),
       onNameCommit: (name) => this.commitName(name),
@@ -114,6 +122,7 @@ export class HostLobbyScene implements Scene {
   }
 
   exit(): void {
+    clearInviteHandler(this.onInvite);
     this.ui?.destroy();
     this.ui = null;
     if (this.lobby) {

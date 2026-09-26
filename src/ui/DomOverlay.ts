@@ -132,12 +132,12 @@ export class DomOverlay {
     el.style.position = 'absolute';
     el.style.boxSizing = 'border-box';
     el.style.margin = '0';
-    // 要素の中のキー入力をゲームの Input (window で受けている) に渡さない
+    // 要素の中のキー入力をゲームの Input (window で受けている) に渡さない。
+    // keyup は止めない (欄の外で押して欄の中で離したキーが Input に押したまま残り、次の ENTER が効かなくなるため)
     el.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Escape') el.blur();
     });
-    el.addEventListener('keyup', (e) => e.stopPropagation());
     document.body.appendChild(el);
     this.placed.push({ el, rect, isVisible: true });
     this.layout(true);

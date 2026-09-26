@@ -9,7 +9,7 @@ import { drawText } from '../ui/text';
 import { GuestLobbyScene } from './GuestLobbyScene';
 import { HostLobbyScene } from './HostLobbyScene';
 import { MenuScene } from './MenuScene';
-import { wasMenuBackPressed, wasMenuConfirmPressed } from './menuKeys';
+import { afterRaceInputDelay, wasAfterRaceConfirmPressed, wasMenuBackPressed } from './menuKeys';
 import { NetRaceScene } from './NetRaceScene';
 import type { OnlineLink } from './onlineLink';
 
@@ -20,6 +20,9 @@ const tableTop = 112;
  * 決定でロビーに戻る (接続は切らない。network.md「手間を減らす工夫」の 5)。ホストとの接続が切れていたらメニューへ
  */
 export class NetResultScene implements Scene {
+  /** 表示してから入力を受け付けるまでの残り (秒) */
+  private inputDelay = afterRaceInputDelay;
+
   constructor(
     private readonly game: Game,
     private readonly link: OnlineLink,
@@ -41,9 +44,13 @@ export class NetResultScene implements Scene {
     this.link.session.onRaceStart = null;
   }
 
-  update(): void {
+  update(dt: number): void {
+    if (this.inputDelay > 0) {
+      this.inputDelay -= dt;
+      return;
+    }
     const { input, audio } = this.game;
-    if (!wasMenuConfirmPressed(input) && !wasMenuBackPressed(input)) return;
+    if (!wasAfterRaceConfirmPressed(input) && !wasMenuBackPressed(input)) return;
     audio.playSe('ui-confirm');
     const game = this.game;
     if (this.isClosed) {
