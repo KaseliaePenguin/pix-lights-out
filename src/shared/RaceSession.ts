@@ -1,5 +1,5 @@
 import type { CarParams, CpuDifficulty, RaceSessionRules } from './carParams';
-import { carParams, raceRules, raceSessionRules } from './carParams';
+import { carParams, raceSessionRules } from './carParams';
 import type { ContactResult } from './carContact';
 import { detectContact } from './carContact';
 import { ContactSystem } from './ContactSystem';
@@ -9,14 +9,20 @@ import type { CpuSurroundings } from './CpuDriver';
 import { CpuDriver, createCpuSurroundings } from './CpuDriver';
 import type { LapEvent } from './LapTracker';
 import { approach } from './math';
-import { RaceCar, gapLeader, gapNone, gapOut, gapPit } from './RaceCar';
+import { RaceCar, gapNone } from './RaceCar';
 import type { RaceGap } from './raceGap';
+import type { RaceCarStepContext } from './raceCarSteps';
+import { driveRaceCar } from './raceCarSteps';
 import { RacingLine } from './RacingLine';
 import { Random } from './Random';
+import {
+  buildRaceResults, isBlueFlagged, isLappedPair, provisionalPosition, raceDistanceOf, recordTiming, SessionBests, sortStandings,
+  updateRaceGaps,
+} from './raceStandings';
 import { isInSlipstream } from './slipstream';
 import type { TimingResult } from './TimeAttackSession';
 import type { Car } from './Car';
-import type { Pose, Track } from './Track';
+import type { Track } from './Track';
 
 export interface RaceConfig {
   track: Track;
@@ -141,9 +147,6 @@ export class RaceSession {
   litLamps = 0;
   /** チェッカーが出たか・先頭のゴール時刻 */
   isCheckered = false;
-  /** 全体ベストラップとその車番 (まだなければ null) */
-  fastestLap: number | null = null;
-  fastestLapCarNumber: number | null = null;
   /** 確定した結果 (phase が finished になってから) */
   results: readonly RaceResult[] = [];
 
@@ -151,10 +154,10 @@ export class RaceSession {
   private readonly carList: Car[];
   private readonly events: RaceEvent[] = [];
   private readonly pendingEvents: RaceEvent[] = [];
-  private readonly bestSectors: (number | null)[] = [null, null, null];
+  private readonly bests = new SessionBests();
   private readonly surroundings: CpuSurroundings & { others: Car[] };
   private readonly tmpContact: ContactResult = { depth: 0, nx: 0, ny: 0, x: 0, y: 0 };
-  private readonly tmpPose: Pose = { x: 0, y: 0, heading: 0 };
+  private readonly stepContext: RaceCarStepContext;
   private readonly finishedNow: RaceCar[] = [];
   private readonly isGhostPairBound: (a: number, b: number) => boolean;
   private leaderFinishAt = 0;
@@ -209,11 +212,27 @@ export class RaceSession {
     this.contacts = new ContactSystem(cars.length);
     this.surroundings = createCpuSurroundings(cars.length);
     this.isGhostPairBound = (a, b) => this.isGhostPair(a, b);
+    this.stepContext = {
+      dt: 0, isStarted: false, tPrev: 0, lightsOutAt: 0, events: this.events,
+      isResetAvailable: (rc) => this.isResetAvailable(rc),
+      overlapsAny: (rc) => this.overlapsAny(rc),
+      handleLapEvent: (rc, e) => this.handleLapEvent(rc, e),
+      tmpPose: { x: 0, y: 0, heading: 0 },
+    };
 
     const lampsDone = this.rules.firstLampDelay + this.rules.lampInterval * (this.rules.lampCount - 1);
     this.lightsOutAt = lampsDone + random.range(this.rules.lightsOutWaitMin, this.rules.lightsOutWaitMax);
     this.updateDistances();
     this.updateOrder();
+  }
+
+  /** 全体ベストラップとその車番 (まだなければ null) */
+  get fastestLap(): number | null {
+    return this.bests.fastestLap;
+  }
+
+  get fastestLapCarNumber(): number | null {
+    return this.bests.fastestLapCarNumber;
   }
 
   /** 消灯からの経過時間 (消灯前は 0) */
@@ -265,7 +284,7 @@ export class RaceSession {
     const ca = this.cars[a];
     const cb = this.cars[b];
     if (ca.isGhost || cb.isGhost) return true;
-    return Math.abs(ca.distance - cb.distance) >= this.track.length * this.rules.lappedGhostRatio;
+    return isLappedPair(this.track, ca, cb, this.rules);
   }
 
   /** リタイア (ポーズメニューの RETIRE)。1 人用でプレイヤーがリタイアしたら、その場で結果を確定する */
@@ -294,6 +313,11 @@ export class RaceSession {
     const isStarted = this.phase !== 'grid';
 
     // 1. 入力とコース復帰、DRS、車の物理
+    const ctx = this.stepContext;
+    ctx.dt = dt;
+    ctx.isStarted = isStarted;
+    ctx.tPrev = tPrev;
+    ctx.lightsOutAt = this.lightsOutAt;
     for (const rc of this.cars) {
       const car = rc.car;
       if (rc.status === 'retired') {
@@ -305,30 +329,7 @@ export class RaceSession {
         this.fillSurroundings(rc, isStarted, tPrev);
         rc.driver.update(car, this.surroundings, dt, rc.controls);
       }
-      if (!isStarted && (rc.controls.throttle > 0 || rc.controls.brake > 0)) rc.hasGridInput = true;
-      if (isStarted && rc.reactionTime === null && rc.controls.throttle > 0 && rc.status === 'racing') {
-        rc.reactionTime = Math.max(0, tPrev - this.lightsOutAt);
-        this.events.push({ type: 'reaction', carNumber: rc.carNumber, time: rc.reactionTime });
-      }
-      if (rc.controls.resetPressed && rc.resetTimer < 0 && rc.status !== 'retired') {
-        if (this.isResetAvailable(rc)) {
-          rc.resetTimer = 0;
-          car.controlLocked = true;
-          this.events.push({ type: 'resetStarted', carNumber: rc.carNumber });
-        } else if (rc.isPlayer && isStarted) {
-          this.events.push({ type: 'resetRejected', carNumber: rc.carNumber });
-        }
-      }
-      this.updateReset(rc, dt);
-      rc.drs.isEligible = rc.isDrsEligible;
-      rc.drs.update(car, rc.lap.projection.s);
-      if (rc.wasInDrsZone && !rc.drs.isInZone) rc.isDrsEligible = false;
-      rc.wasInDrsZone = rc.drs.isInZone;
-      car.update(rc.controls, dt);
-      rc.gearbox.update(car.isSpinning ? car.speed : car.sF);
-      if (rc.drs.enabledOnEntry) this.events.push({ type: 'drsEnabled', carNumber: rc.carNumber });
-      if (car.drsOpened) this.events.push({ type: 'drsOpened', carNumber: rc.carNumber });
-      if (car.drsClosed) this.events.push({ type: 'drsClosed', carNumber: rc.carNumber });
+      driveRaceCar(rc, ctx);
     }
 
     // 2. 車同士の接触 (全車の移動後)
@@ -371,7 +372,7 @@ export class RaceSession {
       this.checkFinalize();
     }
     for (const rc of this.finishedNow) {
-      const position = this.phase === 'finished' ? this.resultPosition(rc.carNumber) : this.provisionalPosition(rc);
+      const position = this.phase === 'finished' ? this.resultPosition(rc.carNumber) : provisionalPosition(rc, this.cars);
       this.events.push({ type: 'carFinished', carNumber: rc.carNumber, position, time: rc.finishTime ?? 0 });
     }
     return this.events;
@@ -429,53 +430,13 @@ export class RaceSession {
   }
 
   // ------------------------------------------------------------------
-  // コース復帰 (7.11 節)。置き直してから操作再開 + 3 秒まではゴースト
-
-  private updateReset(rc: RaceCar, dt: number): void {
-    const fade = raceRules.resetFadeTime;
-    if (rc.pitGhostRemaining > 0) {
-      rc.pitGhostRemaining = Math.max(0, rc.pitGhostRemaining - dt);
-      // 期間の終わりに他車と重なっていたら、重ならなくなるまで延ばす (7.10 節)
-      if (rc.pitGhostRemaining === 0 && this.overlapsAny(rc)) rc.pitGhostRemaining = 1e-3;
-    }
-    if (rc.resetTimer < 0) {
-      if (rc.ghostTimeRemaining > 0) {
-        rc.ghostTimeRemaining = Math.max(0, rc.ghostTimeRemaining - dt);
-        if (rc.ghostTimeRemaining === 0 && this.overlapsAny(rc)) rc.ghostTimeRemaining = 1e-3;
-      }
-      return;
-    }
-    const car = rc.car;
-    const before = rc.resetTimer;
-    rc.resetTimer += dt;
-    const t = rc.resetTimer;
-    if (before < fade && t >= fade) {
-      rc.lap.resetPose(this.tmpPose);
-      car.placeAt(this.tmpPose);
-      car.controlLocked = true;
-      rc.driver?.resetTracking();
-      for (const e of rc.lap.applyReset(car)) this.handleLapEvent(rc, e);
-      rc.prevS = rc.lap.projection.s;
-      this.events.push({ type: 'resetPlaced', carNumber: rc.carNumber });
-    }
-    const lockEnd = fade + raceRules.resetLockTime;
-    rc.screenFade = t < fade ? t / fade : Math.max(0, 1 - (t - fade) / fade);
-    rc.resetLockRemaining = t < fade ? raceRules.resetLockTime : Math.max(0, lockEnd - t);
-    if (t >= lockEnd) {
-      rc.resetTimer = -1;
-      rc.screenFade = 0;
-      rc.resetLockRemaining = 0;
-      car.controlLocked = rc.status === 'retired';
-      rc.ghostTimeRemaining = raceRules.resetGhostTime;
-      this.events.push({ type: 'resetFinished', carNumber: rc.carNumber });
-    }
-  }
+  // コース復帰 (7.11 節) の手順は raceCarSteps.ts の updateResetProcedure
 
   /** ゴーストでない相手と当たり判定が重なっているか (ゴーストの延長の判定) */
   private overlapsAny(self: RaceCar): boolean {
     for (const rc of this.cars) {
       if (rc === self || rc.isGhost) continue;
-      if (Math.abs(rc.distance - self.distance) >= this.track.length * this.rules.lappedGhostRatio) continue;
+      if (isLappedPair(this.track, rc, self, this.rules)) continue;
       if (detectContact(self.car, rc.car, this.tmpContact)) return true;
     }
     return false;
@@ -553,19 +514,19 @@ export class RaceSession {
           rc.sectorStartAt = e.time;
         }
         rc.sectorResults.fill('none');
-        this.recordTiming(rc, e.lap * lines, e.time);
+        recordTiming(rc, e.lap * lines, e.time);
         if (e.lap === this.totalLaps && !this.isFinalLapAnnounced && !this.isCheckered) {
           this.isFinalLapAnnounced = true;
           this.events.push({ type: 'finalLap' });
         }
         break;
       case 'timingLine':
-        this.recordTiming(rc, e.lap * lines + e.index, e.at);
+        recordTiming(rc, e.lap * lines + e.index, e.at);
         break;
       case 'sector': {
         const time = e.at - rc.sectorStartAt;
         rc.sectorStartAt = e.at;
-        const result = this.classifySector(rc, e.index, time, e.valid);
+        const result = this.bests.classifySector(rc, e.index, time, e.valid);
         rc.sectorResults[e.index] = result;
         this.events.push({ type: 'sectorResult', carNumber: rc.carNumber, lap: e.lap, index: e.index, time, result });
         break;
@@ -581,46 +542,12 @@ export class RaceSession {
     }
   }
 
-  private recordTiming(rc: RaceCar, key: number, at: number): void {
-    if (key < 0 || key >= rc.timingTimes.length) return;
-    rc.timingTimes[key] = at;
-    rc.lastTimingKey = key;
-  }
-
-  private classifySector(rc: RaceCar, index: number, time: number, valid: boolean): TimingResult {
-    if (!valid) return 'none';
-    let result: TimingResult = 'slower';
-    const own = rc.bestSectors[index];
-    if (own === null || time <= own) {
-      rc.bestSectors[index] = time;
-      result = 'personal';
-    }
-    const all = this.bestSectors[index];
-    if (all === null || time <= all) {
-      this.bestSectors[index] = time;
-      result = 'overall';
-    }
-    return result;
-  }
-
   private completeLap(rc: RaceCar, lap: number, time: number, valid: boolean, at: number): void {
     rc.lapsCompleted = lap;
     rc.lastLap = time;
     rc.lapTimes.push(time);
-    let result: TimingResult = 'none';
-    if (valid) {
-      result = 'slower';
-      if (rc.bestLap === null || time <= rc.bestLap) {
-        rc.bestLap = time;
-        result = 'personal';
-      }
-      if (this.fastestLap === null || time < this.fastestLap) {
-        this.fastestLap = time;
-        this.fastestLapCarNumber = rc.carNumber;
-        result = 'overall';
-        if (lap >= 2) this.events.push({ type: 'fastestLap', carNumber: rc.carNumber, lap, time });
-      }
-    }
+    const result = this.bests.classifyLap(rc, time, valid);
+    if (result === 'overall' && lap >= 2) this.events.push({ type: 'fastestLap', carNumber: rc.carNumber, lap, time });
     rc.lastLapResult = result;
     this.events.push({ type: 'lapResult', carNumber: rc.carNumber, lap, time, result });
 
@@ -645,19 +572,9 @@ export class RaceSession {
   // 順位とタイム差 (7.5 節)
 
   private updateDistances(): void {
-    const L = this.track.length;
-    const cps = this.track.checkpoints;
-    const n = cps.length;
     for (const rc of this.cars) {
       if (rc.status !== 'racing') continue;
-      // 中心線上の位置を「直前のチェックポイント〜次のチェックポイント」の間に制限する (ショートカットで順位が上がらないように)
-      const lap = rc.lap;
-      const next = lap.nextCheckpoint;
-      const prevS = cps[(next - 1 + n) % n].s;
-      const span = this.track.deltaS(prevS, cps[next].s);
-      const d = Math.max(0, Math.min(span, this.track.deltaS(prevS, lap.projection.s)));
-      // 1 周の中の位置は、次のチェックポイントが 0 (コントロールライン) なら最後の区間 (L の手前)
-      rc.distance = (lap.lap - 1) * L + prevS + d;
+      rc.distance = raceDistanceOf(this.track, rc.lap.lap, rc.lap.nextCheckpoint, rc.lap.projection.s);
     }
   }
 
@@ -674,97 +591,20 @@ export class RaceSession {
 
   /** 並べ替え (安定な挿入ソート。同じ値なら前のフレームの並びを保つ) */
   private updateOrder(): void {
-    const order = this.order;
-    for (let i = 1; i < order.length; i++) {
-      const x = order[i];
-      let j = i - 1;
-      while (j >= 0 && compareStanding(order[j], x) > 0) {
-        order[j + 1] = order[j];
-        j--;
-      }
-      order[j + 1] = x;
-    }
-    for (let i = 0; i < order.length; i++) {
-      order[i].position = i + 1;
-      this.orderNumbers[i] = order[i].carNumber;
-    }
+    sortStandings(this.order, this.orderNumbers);
   }
 
   private updateGaps(): void {
-    const order = this.order;
-    const leader = order[0];
-    for (let i = 0; i < order.length; i++) {
-      const rc = order[i];
-      if (rc.status === 'retired') {
-        rc.gapToAhead = gapOut;
-        rc.gapToLeader = gapOut;
-      } else if (rc.lap.isInPitLane) {
-        rc.gapToAhead = gapPit;
-        rc.gapToLeader = gapPit;
-      } else if (i === 0) {
-        rc.gapToAhead = gapLeader;
-        rc.gapToLeader = gapLeader;
-      } else {
-        rc.gapToAhead = this.gapBetween(rc, order[i - 1], rc.gapToAhead);
-        rc.gapToLeader = this.gapBetween(rc, leader, rc.gapToLeader);
-      }
-      const behind = i + 1 < order.length ? order[i + 1] : null;
-      if (behind === null || behind.status === 'retired') rc.gapToBehind = null;
-      else if (rc.status === 'retired') rc.gapToBehind = gapOut;
-      else rc.gapToBehind = this.gapBetween(behind, rc, rc.gapToBehind ?? gapNone);
-    }
-  }
-
-  /**
-   * me が ahead からどれだけ遅れているか。同じ周・同じタイミングラインの通過時刻の差。
-   * 進行距離の差が 1 周以上なら周回遅れ。値が変わらなければ前の値 (オブジェクト) をそのまま返す
-   */
-  private gapBetween(me: RaceCar, ahead: RaceCar, previous: RaceGap): RaceGap {
-    const L = this.track.length;
-    if (me.status === 'finished' && ahead.status === 'finished') {
-      const laps = ahead.lapsCompleted - me.lapsCompleted;
-      if (laps > 0) return lapsGap(previous, laps);
-      return timeGap(previous, (me.finishTime ?? 0) - (ahead.finishTime ?? 0));
-    }
-    const diff = ahead.distance - me.distance;
-    if (diff >= L) return lapsGap(previous, Math.floor(diff / L));
-    const key = me.lastTimingKey;
-    if (key < 0) return gapNone;
-    const t = ahead.timingTimes[key];
-    if (Number.isNaN(t)) return previous;
-    return timeGap(previous, me.timingTimes[key] - t);
+    updateRaceGaps(this.order, this.track);
   }
 
   /** BLUE FLAG (7.10 節): 周回遅れにする側の車が、後ろ 190 px 以内に来た */
   private updateBlueFlags(): void {
-    const L = this.track.length;
     for (const x of this.cars) {
-      let blue = false;
-      if (x.status === 'racing' && this.phase === 'racing') {
-        for (const y of this.cars) {
-          if (y === x || y.status !== 'racing') continue;
-          const lead = y.distance - x.distance;
-          if (lead < L * this.rules.lappedGhostRatio) continue;
-          const behindOnTrack = (((x.distance - y.distance) % L) + L) % L;
-          if (behindOnTrack > 0 && behindOnTrack <= this.rules.blueFlagDistance) {
-            blue = true;
-            break;
-          }
-        }
-      }
+      const blue = this.phase === 'racing' && isBlueFlagged(x, this.cars, this.track, this.rules);
       if (blue && !x.isBlueFlag) this.events.push({ type: 'blueFlag', carNumber: x.carNumber });
       x.isBlueFlag = blue;
     }
-  }
-
-  private provisionalPosition(rc: RaceCar): number {
-    let ahead = 0;
-    for (const o of this.cars) {
-      if (o === rc || o.status === 'retired' || o.status === 'unclassified') continue;
-      if (o.status === 'finished' && o.lapsCompleted >= rc.lapsCompleted && o.finishOrder < rc.finishOrder) ahead++;
-      else if (o.status === 'racing' && o.lapsCompleted >= rc.lapsCompleted) ahead++;
-    }
-    return ahead + 1;
   }
 
   private resultPosition(carNumber: number): number {
@@ -791,7 +631,7 @@ export class RaceSession {
   private finalize(estimate: boolean, events: RaceEvent[]): void {
     if (estimate) this.estimateRemaining();
     this.phase = 'finished';
-    this.results = this.buildResults();
+    this.results = buildRaceResults(this.cars, this.track);
     this.updateOrder();
     events.push({ type: 'raceFinished' });
   }
@@ -835,65 +675,4 @@ export class RaceSession {
       }
     }
   }
-
-  private buildResults(): RaceResult[] {
-    const L = this.track.length;
-    const finished = this.cars.filter((rc) => rc.status === 'finished');
-    finished.sort((a, b) => b.lapsCompleted - a.lapsCompleted || totalOf(a) - totalOf(b) || a.finishOrder - b.finishOrder);
-    const unclassified = this.cars.filter((rc) => rc.status === 'unclassified' || rc.status === 'racing');
-    unclassified.sort((a, b) => b.distance - a.distance);
-    const retired = this.cars.filter((rc) => rc.status === 'retired');
-    retired.sort((a, b) => b.distance - a.distance);
-    const all = [...finished, ...unclassified, ...retired];
-    const winner = finished.length > 0 ? finished[0] : null;
-    return all.map((rc, i) => {
-      const status = rc.status === 'finished' ? 'finished' : rc.status === 'retired' ? 'retired' : 'unclassified';
-      let gap: RaceGap = gapNone;
-      if (status === 'retired') gap = gapOut;
-      else if (rc === winner) gap = gapLeader;
-      else if (winner) {
-        const laps = status === 'finished' ? winner.lapsCompleted - rc.lapsCompleted : Math.max(1, Math.ceil((winner.lapsCompleted * L - rc.distance) / L));
-        gap = laps > 0 ? { kind: 'laps', laps } : { kind: 'time', seconds: totalOf(rc) - totalOf(winner) };
-      }
-      const total = status === 'finished' ? totalOf(rc) : null;
-      return {
-        carNumber: rc.carNumber,
-        isPlayer: rc.isPlayer,
-        position: i + 1,
-        status,
-        lapsCompleted: rc.lapsCompleted,
-        finishTime: status === 'finished' ? rc.finishTime : null,
-        penalty: rc.penalty,
-        totalTime: total,
-        gapToWinner: gap,
-        bestLap: rc.bestLap,
-        isJumpStart: rc.isJumpStart,
-        isEstimated: rc.isEstimated,
-      };
-    });
-  }
-}
-
-function totalOf(rc: RaceCar): number {
-  return (rc.finishTime ?? Infinity) + rc.penalty;
-}
-
-/** 順位の比較 (負なら a が前)。ゴールした車は周回数とゴール順、走っている車は進行距離、リタイアは最後 */
-function compareStanding(a: RaceCar, b: RaceCar): number {
-  const ra = a.status === 'retired' ? 1 : 0;
-  const rb = b.status === 'retired' ? 1 : 0;
-  if (ra !== rb) return ra - rb;
-  // ゴールした車の進行距離は「終えた周回 × 1 周」で止めてあるので、同じ周回どうしはゴール順になる
-  if (a.distance !== b.distance) return b.distance - a.distance;
-  const fa = a.finishOrder < 0 ? Infinity : a.finishOrder;
-  const fb = b.finishOrder < 0 ? Infinity : b.finishOrder;
-  return fa === fb ? 0 : fa - fb;
-}
-
-function lapsGap(previous: RaceGap, laps: number): RaceGap {
-  return previous.kind === 'laps' && previous.laps === laps ? previous : { kind: 'laps', laps };
-}
-
-function timeGap(previous: RaceGap, seconds: number): RaceGap {
-  return previous.kind === 'time' && previous.seconds === seconds ? previous : { kind: 'time', seconds };
 }
