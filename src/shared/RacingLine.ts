@@ -48,10 +48,12 @@ export class RacingLine {
   readonly length: number;
   /** 速度プロファイルから計算したラップタイムの目安 (秒) */
   readonly estimatedLapTime: number;
+  /** 作ったときの条件 (computeSpeeds の既定) */
+  readonly options: Readonly<RacingLineOptions>;
 
   constructor(private readonly track: Track, options: Partial<RacingLineOptions> = {}) {
     const opt: RacingLineOptions = { ...defaultOptions, ...options };
-    const p = opt.params;
+    this.options = opt;
     const step = 2;
     const n = Math.floor(track.sampleCount / step);
     this.count = n;
@@ -110,7 +112,18 @@ export class RacingLine {
       this.curvature[k] = mengerCurvature(this.xs[a], this.ys[a], this.xs[k], this.ys[k], this.xs[b], this.ys[b]);
     }
 
-    // 速度プロファイル
+    this.speeds = this.computeSpeeds(opt);
+    this.estimatedLapTime = this.lapTimeOf(this.speeds);
+  }
+
+  /**
+   * 線の形はそのままで、別の条件 (CPU の腕前・タイヤ) の目標速度を計算する。
+   * 形の計算 (数百ミリ秒) をやり直さずに、CPU ごとの速度プロファイルを作るために使う
+   */
+  computeSpeeds(options: Partial<RacingLineOptions> = {}): Float64Array {
+    const opt: RacingLineOptions = { ...this.options, ...options };
+    const p = opt.params;
+    const n = this.count;
     const vmax = new Float64Array(n);
     for (let k = 0; k < n; k++) {
       const drs = opt.useDrs && this.isInDrs(this.trackS[k]);
@@ -146,13 +159,17 @@ export class RacingLine {
         speeds[j] = Math.min(speeds[j], Math.sqrt(speeds[k] * speeds[k] + 2 * b * ds));
       }
     }
-    this.speeds = speeds;
+    return speeds;
+  }
+
+  /** 速度プロファイルどおりに走ったときのラップタイムの目安 (秒) */
+  lapTimeOf(speeds: Float64Array): number {
     let time = 0;
-    for (let k = 0; k < n; k++) {
-      const j = (k + 1) % n;
+    for (let k = 0; k < this.count; k++) {
+      const j = (k + 1) % this.count;
       time += this.segmentLength(k) / Math.max(1, (speeds[k] + speeds[j]) / 2);
     }
-    this.estimatedLapTime = time;
+    return time;
   }
 
   /** 位置に最も近い線上の点の番号。hint (前回の番号) の近くだけを探す */

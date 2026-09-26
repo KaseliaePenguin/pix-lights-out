@@ -13,12 +13,12 @@ export type LapInvalidReason = 'missedCheckpoint' | 'reset' | 'pitLane';
 export type LapEvent =
   /** コントロールラインを通過して周回が始まった (lap は 1 から) */
   | { type: 'lapStarted'; lap: number; time: number }
-  /** 周回が終わった。time はラップタイム */
-  | { type: 'lapCompleted'; lap: number; time: number; valid: boolean; sectors: readonly number[]; splits: readonly number[] }
-  /** 区間 (0〜2) を通過した。time は区間タイム */
-  | { type: 'sector'; lap: number; index: number; time: number; valid: boolean }
-  /** タイミングライン (250 px ごと) を通過した。lapTime はその時点の周回タイム */
-  | { type: 'timingLine'; lap: number; index: number; lapTime: number }
+  /** 周回が終わった。time はラップタイム、at は通過の時刻 (LapTracker.time の基準) */
+  | { type: 'lapCompleted'; lap: number; time: number; at: number; valid: boolean; sectors: readonly number[]; splits: readonly number[] }
+  /** 区間 (0〜2) を通過した。time は区間タイム、at は通過の時刻 */
+  | { type: 'sector'; lap: number; index: number; time: number; at: number; valid: boolean }
+  /** タイミングライン (250 px ごと) を通過した。lapTime はその時点の周回タイム、at は通過の時刻 */
+  | { type: 'timingLine'; lap: number; index: number; lapTime: number; at: number }
   | { type: 'checkpointMissed' }
   | { type: 'checkpointRecovered' }
   | { type: 'lapInvalidated'; reason: LapInvalidReason }
@@ -198,7 +198,7 @@ export class LapTracker {
         const cross = t0 + (before / moved) * dt;
         const lapTime = cross - this.lapStartTime;
         this.splits[this.nextTimingLine] = lapTime;
-        this.events.push({ type: 'timingLine', lap: this.lap, index: this.nextTimingLine, lapTime });
+        this.events.push({ type: 'timingLine', lap: this.lap, index: this.nextTimingLine, lapTime, at: cross });
         this.nextTimingLine++;
       }
     }
@@ -273,11 +273,12 @@ export class LapTracker {
         const lapTime = crossTime - this.lapStartTime;
         const sectorTime = crossTime - this.sectorStartTime;
         this.sectorTimes[2] = sectorTime;
-        this.events.push({ type: 'sector', lap: this.lap, index: 2, time: sectorTime, valid: this.lapValid });
+        this.events.push({ type: 'sector', lap: this.lap, index: 2, time: sectorTime, at: crossTime, valid: this.lapValid });
         this.events.push({
           type: 'lapCompleted',
           lap: this.lap,
           time: lapTime,
+          at: crossTime,
           valid: this.lapValid,
           sectors: this.sectorTimes.map((v) => v ?? NaN),
           splits: this.splits.slice(),
@@ -297,7 +298,7 @@ export class LapTracker {
     } else if (this.lap > 0 && this.sectorIndex < 2 && index === track.sectorCheckpoints[this.sectorIndex]) {
       const sectorTime = crossTime - this.sectorStartTime;
       this.sectorTimes[this.sectorIndex] = sectorTime;
-      this.events.push({ type: 'sector', lap: this.lap, index: this.sectorIndex, time: sectorTime, valid: this.lapValid });
+      this.events.push({ type: 'sector', lap: this.lap, index: this.sectorIndex, time: sectorTime, at: crossTime, valid: this.lapValid });
       this.sectorStartTime = crossTime;
       this.sectorIndex++;
     }

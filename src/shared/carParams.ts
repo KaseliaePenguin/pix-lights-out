@@ -314,6 +314,115 @@ export const raceRules: Readonly<RaceRules> = {
   kmhPerPxPerSec: 0.6,
 };
 
+/** 決勝のルール (game-design.md 7.2〜7.7・7.10 節、car-physics.md 12 節) */
+export interface RaceSessionRules {
+  /** スタートランプ: グリッドに並んでから最初の点灯まで・点灯の間隔・ユニット数 */
+  firstLampDelay: number;
+  lampInterval: number;
+  lampCount: number;
+  /** 5 つ点灯してから消灯までのランダムな待ち (一様分布) */
+  lightsOutWaitMin: number;
+  lightsOutWaitMax: number;
+  /** フライング: グリッド位置からこの距離以上動いたら成立。罰則 (ゴールタイムに加算) */
+  jumpStartDistance: number;
+  jumpStartPenalty: number;
+  /** 先頭のゴールからこの秒数でゴールしていない車は未完走 */
+  finishTimeout: number;
+  /** 周回遅れの関係 (ゴースト): 進行距離の差が 1 周のこの割合以上 */
+  lappedGhostRatio: number;
+  /** BLUE FLAG: 周回遅れにする側の車が後ろこの距離 (中心線沿い) 以内に来た */
+  blueFlagDistance: number;
+  /** ピット出口を出てからゴーストでいる時間 */
+  pitExitGhostTime: number;
+  /** 決勝の DRS: 検知ラインで前の車との差がこの秒数以内。この周回以降 */
+  drsGapThreshold: number;
+  drsMinLap: number;
+  /** 予選をスキップしたときの CPU の予選タイム (7.8 節): 基準 × (1 + (1 − 腕前) × 係数) + 乱数 */
+  qualifyingSkillFactor: number;
+  qualifyingNoiseMin: number;
+  qualifyingNoiseMax: number;
+}
+
+export const raceSessionRules: Readonly<RaceSessionRules> = {
+  firstLampDelay: 1.0,
+  lampInterval: 1.0,
+  lampCount: 5,
+  lightsOutWaitMin: 0.5,
+  lightsOutWaitMax: 2.5,
+  jumpStartDistance: 5,
+  jumpStartPenalty: 3,
+  finishTimeout: 30,
+  lappedGhostRatio: 0.5,
+  blueFlagDistance: 190,
+  pitExitGhostTime: 1.0,
+  drsGapThreshold: 1.0,
+  drsMinLap: 2,
+  qualifyingSkillFactor: 1.2,
+  qualifyingNoiseMin: -0.2,
+  qualifyingNoiseMax: 0.4,
+};
+
+export type CpuDifficulty = 'easy' | 'normal' | 'hard';
+
+/** CPU の難易度ごとの値 (game-design.md 9.2 節) */
+export interface CpuDifficultyParams {
+  /** 腕前 (目標速度とブレーキの倍率) */
+  skill: number;
+  /** コーナーごとにブレーキ開始が遅れる確率 */
+  mistakeRate: number;
+  /** スタートの反応時間の範囲 (秒) */
+  reactionMin: number;
+  reactionMax: number;
+}
+
+/** CPU の走り方 (game-design.md 9 章)。仕様にない値は実装で決めたもの (★) */
+export interface CpuParams {
+  difficulties: Readonly<Record<CpuDifficulty, CpuDifficultyParams>>;
+  /** 個体差: 腕前に ±この値の一様乱数を足す */
+  skillSpread: number;
+  /** ミスのときにブレーキ開始が遅れる距離 (px) */
+  mistakeDelay: number;
+  /** ★ ミスを抽選する範囲: コーナーの円弧の手前この距離から */
+  mistakeWindow: number;
+  /** 追い抜き: 前の車がこの距離 (中心間、前方向) 以内で自分より遅いとき、ラインを最大 overtakeOffset ずらす (最大 overtakeTime 秒) */
+  overtakeRange: number;
+  overtakeOffset: number;
+  overtakeTime: number;
+  /** ★ 追い抜きのあと、次の追い抜きを始めるまでの間 (秒) と、ラインをずらす速さ (px/秒) */
+  overtakeCooldown: number;
+  overtakeShiftRate: number;
+  /** ★ 「前にいる」とみなす横の幅 (自車の中心線からの距離、px) */
+  aheadLateral: number;
+  /** 追突回避: 前の車との隙間 (車の長さを除く) がこの距離以内で近づいているときはブレーキ */
+  avoidGap: number;
+  /** ★ 追突回避の先読み: 隙間の中で止まるのに要る減速度が brakeDecel × この値を超えたらブレーキ */
+  avoidDecelRatio: number;
+  /** スタック: この速度未満がこの秒数続いたらコース復帰 */
+  stuckSpeed: number;
+  stuckTime: number;
+}
+
+export const cpuParams: Readonly<CpuParams> = {
+  difficulties: {
+    easy: { skill: 0.88, mistakeRate: 0.08, reactionMin: 0.3, reactionMax: 0.4 },
+    normal: { skill: 0.94, mistakeRate: 0.04, reactionMin: 0.2, reactionMax: 0.32 },
+    hard: { skill: 0.98, mistakeRate: 0.015, reactionMin: 0.15, reactionMax: 0.25 },
+  },
+  skillSpread: 0.01,
+  mistakeDelay: 37.5,
+  mistakeWindow: 700,
+  overtakeRange: 100,
+  overtakeOffset: 25,
+  overtakeTime: 3,
+  overtakeCooldown: 1.5,
+  overtakeShiftRate: 50,
+  aheadLateral: 24,
+  avoidGap: 50,
+  avoidDecelRatio: 0.6,
+  stuckSpeed: 62.5,
+  stuckTime: 2,
+};
+
 /** タイヤのグリップ倍率 (car-physics.md 10.1 節) */
 export function tyreGrip(params: Readonly<CarParams>, compound: TyreCompound, wear: number): number {
   const w = Math.min(Math.max(wear, 0), 1);

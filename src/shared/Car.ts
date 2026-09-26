@@ -369,6 +369,33 @@ export class Car {
     this.y += dy;
   }
 
+  /**
+   * 壁にめり込んでいれば位置だけを押し戻す (車同士の押し戻しで壁に押し込まれたとき用)。速度は変えない
+   * (壁への速度は次の update の壁の判定で処理される)。押し戻したら true
+   */
+  pushOutOfWalls(): boolean {
+    let moved = false;
+    for (let iter = 0; iter < 4; iter++) {
+      let maxDepth = 0;
+      let nx = 0;
+      let ny = 0;
+      for (let k = 0; k < outlineLocal.length; k++) {
+        this.localToWorld(outlineLocal[k][0], outlineLocal[k][1], tmpPoint);
+        this.env.wallContact(tmpPoint.x, tmpPoint.y, this.contact);
+        if (this.contact.depth > maxDepth && (this.contact.normalX !== 0 || this.contact.normalY !== 0)) {
+          maxDepth = this.contact.depth;
+          nx = this.contact.normalX;
+          ny = this.contact.normalY;
+        }
+      }
+      if (maxDepth <= 0) break;
+      this.x += nx * (maxDepth + 0.05);
+      this.y += ny * (maxDepth + 0.05);
+      moved = true;
+    }
+    return moved;
+  }
+
   /** 接触後の速度ベクトルを設定する (sF・sR を計算し直す。スピン中はスピンの速度) */
   applyContactVelocity(vx: number, vy: number): void {
     this.setVelocity(vx, vy);
