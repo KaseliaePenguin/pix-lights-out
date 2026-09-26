@@ -5,6 +5,7 @@ import { drawFooterHint, drawMenuList, drawScreenTitle } from '../ui/menuList';
 import type { MenuItemView } from '../ui/menuList';
 import { drawParagraph } from '../ui/paragraph';
 import { clearInviteHandler, setInviteHandler } from './inviteRouter';
+import type { Invite } from './inviteRouter';
 import { GuestLobbyScene } from './GuestLobbyScene';
 import { HostLobbyScene } from './HostLobbyScene';
 import { MenuScene } from './MenuScene';
@@ -41,7 +42,7 @@ export class MultiplayerScene implements Scene {
   }
 
   /** 開いたまま招待リンクを開いたら、参加画面へ */
-  private readonly onInvite = (code: string) => this.game.changeScene(new GuestLobbyScene(this.game, null, code));
+  private readonly onInvite = (invite: Invite) => this.game.changeScene(new GuestLobbyScene(this.game, null, invite));
 
   enter(): void {
     this.game.audio.playBgm('menu-theme');

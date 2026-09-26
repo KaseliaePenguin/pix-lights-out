@@ -6,10 +6,12 @@ import { HostLobbyScene } from './scenes/HostLobbyScene';
 import { RaceScene } from './scenes/RaceScene';
 import { loadRaceSetup, newRaceSeed } from './scenes/raceSetup';
 import { routeInvite } from './scenes/inviteRouter';
+import type { Invite } from './scenes/inviteRouter';
 import { applyVolumeSettings, loadSettings } from './scenes/settingsStorage';
 import { TimeAttackScene } from './scenes/TimeAttackScene';
 import { TitleScene } from './scenes/TitleScene';
 import { inviteCodeFromHash } from './shared/net/connectionCode';
+import { isRoomLinkHash, roomLinkFromHash } from './shared/net/roomLink';
 import { colors } from './ui/colors';
 import { drawText, setUiFontImage } from './ui/text';
 
@@ -18,7 +20,8 @@ import { drawText, setUiFontImage } from './ui/text';
  * race はレース設定の既定値 (CPU 7 台、NORMAL、3 周) で始める。?scene=lobby-host / ?scene=lobby-join はロビー (ホスト / 参加者)
  */
 function firstScene(): Scene {
-  // 招待リンク (#join=PLO1I.…) で開いたら、タイトル・メニューを飛ばして参加画面に入り、返答コードの作成まで進める
+  // 招待リンクで開いたら、タイトル・メニューを飛ばして参加画面に入る
+  // (共通リンク #room= は中継経由でそのまま参加、1 人用の #join= は返答コードの作成まで進める)
   if (invite) return new GuestLobbyScene(game, null, invite);
   const direct = import.meta.env.DEV ? new URLSearchParams(location.search).get('scene') : null;
   if (direct === 'timeattack') return new TimeAttackScene(game);
@@ -29,13 +32,19 @@ function firstScene(): Scene {
 }
 
 /**
- * 招待リンクで開いたときの招待コード。読んだらすぐ URL からフラグメントを消す
- * (再読み込みやブックマークで、使い終わった招待をもう一度使わないように)
+ * 招待リンク (#room= / #join=) で開いたときの招待。読んだらすぐ URL からフラグメントを消す
+ * (再読み込みやブックマークで、使い終わった招待をもう一度使わないように。#room= の鍵を履歴に残さないためでもある)
  */
-function takeInviteFromUrl(): string | null {
-  const code = inviteCodeFromHash(location.hash);
-  if (location.hash.startsWith('#join=')) history.replaceState(history.state, '', location.pathname + location.search);
-  return code;
+function takeInviteFromUrl(): Invite | null {
+  const hash = location.hash;
+  if (!hash.startsWith('#join=') && !isRoomLinkHash(hash)) return null;
+  history.replaceState(history.state, '', location.pathname + location.search);
+  const room = roomLinkFromHash(hash);
+  if (room) return { kind: 'room', room };
+  const code = inviteCodeFromHash(hash);
+  if (code) return { kind: 'code', code };
+  showPageNotice('THE INVITE LINK IS BROKEN. ASK THE HOST TO SEND IT AGAIN.');
+  return null;
 }
 
 /** Canvas の上に短い知らせを数秒出す (シーンが招待を受け取れないとき用) */
@@ -64,13 +73,13 @@ let isLoaded = false;
 // フラグメントはすぐ消し (再読み込みで同じ招待を使わない)、受け取れるシーン (タイトル・メニュー・参加画面) に渡す。
 // ロビー・レースの最中は読み込み直さず (接続が切れるため)、知らせだけ出す
 window.addEventListener('hashchange', () => {
-  const code = takeInviteFromUrl();
-  if (!code) return;
+  const next = takeInviteFromUrl();
+  if (!next) return;
   if (!isLoaded) {
-    invite = code;
+    invite = next;
     return;
   }
-  if (!routeInvite(code)) showPageNotice('CANNOT JOIN NOW. FINISH OR LEAVE THE RACE / LOBBY, THEN OPEN THE INVITE LINK AGAIN.');
+  if (!routeInvite(next)) showPageNotice('CANNOT JOIN NOW. FINISH OR LEAVE THE RACE / LOBBY, THEN OPEN THE INVITE LINK AGAIN.');
 });
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;

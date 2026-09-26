@@ -1,24 +1,30 @@
 import type { Game } from '../core/Game';
 import type { Scene } from '../core/Scene';
 import { GuestConnector } from '../net/GuestConnector';
+import { GuestRoomConnector, shouldFallbackToCode } from '../net/GuestRoomConnector';
+import type { GuestRoomFailure } from '../net/GuestRoomConnector';
 import { NetClientSession } from '../net/NetClientSession';
 import type { NetProfile } from '../net/NetClientSession';
 import type { NetRaceClient } from '../net/NetRaceClient';
 import { netTimings } from '../net/netConfig';
 import type { LinkDiagnostics } from '../net/PeerLink';
+import type { ClientTransport } from '../net/Transport';
 import { checkConnectionCode, extractConnectionCode } from '../shared/net/connectionCode';
+import { parseRoomLink } from '../shared/net/roomLink';
+import type { RoomLink } from '../shared/net/roomLink';
 import { copyText, readClipboardText } from '../ui/clipboard';
 import { colors } from '../ui/colors';
 import { drawLobbyList } from '../ui/lobbyList';
 import type { LobbyRowView } from '../ui/lobbyList';
 import type { MenuItemView } from '../ui/menuList';
-import { closeText, codeErrorText, guestFailureLines, netTexts, rejectText } from '../ui/netTexts';
+import { codeErrorText, guestFailureLines, guestRoomFailureLines, guestRoomFallbackText, netTexts, rejectText } from '../ui/netTexts';
 import { drawPanel } from '../ui/panel';
 import { drawParagraph } from '../ui/paragraph';
 import { teamOf } from '../ui/teams';
 import { drawText } from '../ui/text';
 import { getCourseTrack } from './courseCache';
 import { clearInviteHandler, setInviteHandler } from './inviteRouter';
+import type { Invite } from './inviteRouter';
 import { LobbyUi } from './LobbyUi';
 import { alternativeName, nextFreeTeam } from './lobbyRules';
 import { MenuScene } from './MenuScene';
@@ -28,18 +34,19 @@ import { NetRaceScene } from './NetRaceScene';
 import { loadNetProfile, saveNetProfile } from './netProfile';
 
 /**
- * paste = 招待リンク・コードを待っている、preparing = 返答コードを作っている (最大 5 秒)、waiting = 返答コードを出してホストを待っている、
+ * paste = 招待リンク・コードを待っている、room = 共通リンク (#room=) で中継経由でつないでいる、preparing = 返答コードを作っている (最大 5 秒)、waiting = 返答コードを出してホストを待っている、
  * joining = つながって join の返事を待っている、lobby = ロビーにいる、rejected = 名前・チームの重複などで断られた、
  * failed = つながらなかった、closed = ホストとの接続が切れた
  */
-type GuestPhase = 'paste' | 'preparing' | 'waiting' | 'joining' | 'lobby' | 'rejected' | 'failed' | 'closed';
+type GuestPhase = 'paste' | 'room' | 'preparing' | 'waiting' | 'joining' | 'lobby' | 'rejected' | 'failed' | 'closed';
 
-type GuestItem = 'name' | 'team' | 'pasteInvite' | 'copyReply' | 'ready' | 'joinAgain' | 'copyDetails' | 'retry' | 'leave' | 'back' | 'ok';
+type GuestItem = 'name' | 'team' | 'pasteInvite' | 'tryLink' | 'copyReply' | 'ready' | 'joinAgain' | 'copyDetails' | 'retry' | 'leave' | 'back' | 'ok';
 
 const labels: Record<GuestItem, string> = {
   name: 'NAME',
   team: 'TEAM',
   pasteInvite: 'PASTE INVITE',
+  tryLink: 'TRY THE LINK AGAIN',
   copyReply: 'COPY REPLY CODE',
   ready: 'READY',
   joinAgain: 'JOIN AGAIN',
@@ -69,7 +76,9 @@ const promptRect = { x: codeX + 10, y: codeY + 8, w: codeW - 20, h: 56 };
 const maxAutoJoinAttempts = 16;
 
 /**
- * ロビー (参加者、network.md「参加者の画面」)。招待リンクで開く (invite に招待コード) か、招待リンク・コードを貼り付ける
+ * ロビー (参加者、network.md「参加者の画面」「中継による接続」)。共通リンク (#room=) で開いたら中継経由で自動で入る
+ * (返答コードなし)。中継や部屋の問題でつながらなければ「ホストに招待コードを頼む」案内と貼り付けに切り替える。
+ * 1 人用の招待リンクで開く (invite に招待コード) か、招待リンク・コードを貼り付ける
  * (どこでも Ctrl+V・ボタン・貼り付け欄) → 返答コードができたら自動でコピーを試し、できなければ「ENTER でコピー」の大きな案内
  * → 「ホストの操作を待っています」→ 接続後は参加者一覧。ロビーに入った時点で準備完了にする (外すこともできる)。
  * 名前・チームは前回の値で入り、重複で断られたら自動で名前に数字を付ける・次のチームに変えて入り直す。
@@ -78,11 +87,18 @@ const maxAutoJoinAttempts = 16;
 export class GuestLobbyScene implements Scene {
   private session: NetClientSession | null;
   private connector: GuestConnector | null = null;
+  private roomConnector: GuestRoomConnector | null = null;
+  /** 最後に使った共通リンク (TRY THE LINK AGAIN 用) */
+  private lastRoom: RoomLink | null = null;
+  /** 共通リンクが使えず、従来の方式 (招待コード) に切り替えた理由 */
+  private roomFallback: GuestRoomFailure | null = null;
+  /** 今の接続の方式 (手順の表示に使う) */
+  private method: 'room' | 'code' = 'room';
   private ui: LobbyUi | null = null;
   private replyBox: HTMLTextAreaElement | null = null;
   private pasteBox: HTMLTextAreaElement | null = null;
   private profile: NetProfile;
-  private localPhase: 'paste' | 'preparing' | 'waiting' | 'failed' = 'paste';
+  private localPhase: 'paste' | 'room' | 'preparing' | 'waiting' | 'failed' = 'paste';
   private failureLines: readonly string[] = [];
   private failureDiagnostics: LinkDiagnostics | null = null;
   private selected = 0;
@@ -104,7 +120,7 @@ export class GuestLobbyScene implements Scene {
   constructor(
     private readonly game: Game,
     session: NetClientSession | null,
-    private readonly initialInvite: string | null = null,
+    private readonly initialInvite: Invite | null = null,
   ) {
     this.session = session;
     this.profile = session ? { ...session.profile } : loadNetProfile();
@@ -131,7 +147,9 @@ export class GuestLobbyScene implements Scene {
   private get items(): readonly GuestItem[] {
     switch (this.phase) {
       case 'paste':
-        return ['pasteInvite', 'name', 'team', 'back'];
+        return this.roomFallback && this.lastRoom ? ['pasteInvite', 'name', 'team', 'tryLink', 'back'] : ['pasteInvite', 'name', 'team', 'back'];
+      case 'room':
+        return ['back', 'name', 'team'];
       case 'preparing':
         return ['back'];
       case 'waiting':
@@ -143,18 +161,18 @@ export class GuestLobbyScene implements Scene {
       case 'rejected':
         return ['joinAgain', 'name', 'team', 'leave'];
       case 'failed':
-        return ['copyDetails', 'retry', 'back'];
+        return this.method === 'room' && this.lastRoom ? ['tryLink', 'copyDetails', 'retry', 'back'] : ['copyDetails', 'retry', 'back'];
       case 'closed':
         return ['ok'];
     }
   }
 
   /** 開いたまま招待リンクを開いた: 貼り付けの段階なら受け付け、ロビーの中なら知らせだけ */
-  private readonly onInvite = (code: string) => {
+  private readonly onInvite = (invite: Invite) => {
     const phase = this.phase;
-    if (phase === 'paste') void this.acceptInvite(code);
-    else if (phase === 'joining' || phase === 'lobby') this.ui?.toast('YOU ARE IN A LOBBY. LEAVE IT FIRST, THEN OPEN THE INVITE LINK AGAIN.');
-    else void this.acceptInvite(code);
+    if (phase === 'joining' || phase === 'lobby') this.ui?.toast('YOU ARE IN A LOBBY. LEAVE IT FIRST, THEN OPEN THE INVITE LINK AGAIN.');
+    else if (invite.kind === 'room') this.joinRoom(invite.room);
+    else void this.acceptInvite(invite.code);
   };
 
   enter(): void {
@@ -179,14 +197,19 @@ export class GuestLobbyScene implements Scene {
       this.attach(this.session);
       this.selected = this.items.indexOf('ready');
       this.syncReady(this.session);
+    } else if (this.initialInvite?.kind === 'room') {
+      this.joinRoom(this.initialInvite.room);
     } else if (this.initialInvite) {
-      void this.acceptInvite(this.initialInvite);
+      void this.acceptInvite(this.initialInvite.code);
     }
     this.game.resetClock();
   }
 
   exit(): void {
     clearInviteHandler(this.onInvite);
+    // つながる前にシーンを離れたら中継の接続をやめる (つながったあとは session が持ち回る)
+    this.roomConnector?.cancel();
+    this.roomConnector = null;
     this.ui?.destroy();
     this.ui = null;
     if (this.session) this.session.onChange = null;
@@ -248,6 +271,12 @@ export class GuestLobbyScene implements Scene {
   // ---- 接続 ----
 
   private async acceptInvite(text: string): Promise<void> {
+    // 共通リンク (#room=) を貼り付けた
+    const room = parseRoomLink(text);
+    if (room && (this.phase === 'paste' || this.phase === 'failed')) {
+      this.joinRoom(room);
+      return;
+    }
     if (this.phase !== 'paste' || this.isCheckingCode) {
       if (this.phase !== 'paste') this.ui?.toast('YOU ALREADY USED AN INVITE. SELECT "START OVER" TO USE ANOTHER ONE.', colors.text);
       return;
@@ -262,6 +291,7 @@ export class GuestLobbyScene implements Scene {
     }
     this.isCheckingCode = true;
     this.localPhase = 'preparing';
+    this.method = 'code';
     this.ui?.clearToast();
     this.game.audio.playSe('ui-confirm');
     try {
@@ -282,20 +312,7 @@ export class GuestLobbyScene implements Scene {
       this.isReplyCopied = false;
       this.selected = this.items.indexOf('copyReply');
       connector.onOpen = (transport) => {
-        if (this.connector !== connector) return;
-        this.joiningTime = 0;
-        this.autoJoinAttempts = 0;
-        this.autoNameAttempts = 0;
-        this.autoNameBase = this.profile.name;
-        this.isAutoAdjusted = false;
-        this.wantsReady = true;
-        this.isReadySent = false;
-        const session = new NetClientSession(transport, this.profile, getCourseTrack());
-        this.session = session;
-        this.isAwaitingJoin = true;
-        this.attach(session);
-        this.selected = 0;
-        this.game.audio.playSe('ui-confirm');
+        if (this.connector === connector) this.startSession(transport);
       };
       connector.onFail = (reason) => {
         if (this.connector !== connector || this.session) return;
@@ -311,6 +328,63 @@ export class GuestLobbyScene implements Scene {
     } finally {
       this.isCheckingCode = false;
     }
+  }
+
+  /**
+   * 共通リンク (#room=) の部屋に中継経由で入る。返答コードはなく、つながればそのままロビーに入る。
+   * 中継や部屋の問題 (shouldFallbackToCode) なら、招待コードの貼り付けに切り替えて「ホストに招待コードを頼む」案内を出す
+   */
+  private joinRoom(room: RoomLink): void {
+    const phase = this.phase;
+    if (phase !== 'paste' && phase !== 'failed') {
+      this.game.audio.playSe('ui-error');
+      this.ui?.toast('YOU ALREADY USED AN INVITE. SELECT "START OVER" OR "BACK" FIRST.', colors.text);
+      return;
+    }
+    this.startOver();
+    this.lastRoom = room;
+    this.method = 'room';
+    this.localPhase = 'room';
+    this.selected = 0;
+    const connector = GuestRoomConnector.join(room);
+    this.roomConnector = connector;
+    connector.onOpen = (transport) => {
+      if (this.roomConnector !== connector) return;
+      this.roomConnector = null;
+      this.startSession(transport);
+    };
+    connector.onFail = (failure) => {
+      if (this.roomConnector !== connector || this.session) return;
+      this.roomConnector = null;
+      if (shouldFallbackToCode(failure)) {
+        this.localPhase = 'paste';
+        this.roomFallback = failure;
+        this.method = 'code';
+        this.selected = 0;
+        this.game.audio.playSe('ui-error');
+        return;
+      }
+      const diagnostics = connector.diagnostics();
+      this.fail(diagnostics, guestRoomFailureLines(failure, diagnostics?.isSamePublicAddress === true));
+    };
+  }
+
+  /** ホストとの接続が開いた: ロビーに入る (join を送る) */
+  private startSession(transport: ClientTransport): void {
+    this.joiningTime = 0;
+    this.autoJoinAttempts = 0;
+    this.autoNameAttempts = 0;
+    this.autoNameBase = this.profile.name;
+    this.isAutoAdjusted = false;
+    this.wantsReady = true;
+    this.isReadySent = false;
+    this.roomFallback = null;
+    const session = new NetClientSession(transport, this.profile, getCourseTrack());
+    this.session = session;
+    this.isAwaitingJoin = true;
+    this.attach(session);
+    this.selected = 0;
+    this.game.audio.playSe('ui-confirm');
   }
 
   private attach(session: NetClientSession): void {
@@ -394,6 +468,8 @@ export class GuestLobbyScene implements Scene {
     this.localPhase = 'failed';
     this.connector?.cancel();
     this.connector = null;
+    this.roomConnector?.cancel();
+    this.roomConnector = null;
     if (this.session) {
       this.session.onChange = null;
       this.session.leave();
@@ -407,6 +483,10 @@ export class GuestLobbyScene implements Scene {
   private startOver(): void {
     this.connector?.cancel();
     this.connector = null;
+    this.roomConnector?.cancel();
+    this.roomConnector = null;
+    this.roomFallback = null;
+    this.method = 'room';
     if (this.session) {
       this.session.onChange = null;
       this.session.leave();
@@ -443,6 +523,12 @@ export class GuestLobbyScene implements Scene {
       case 'pasteInvite':
         void this.pasteFromClipboard();
         break;
+      case 'tryLink':
+        if (this.lastRoom) {
+          audio.playSe('ui-confirm');
+          this.joinRoom(this.lastRoom);
+        }
+        break;
       case 'copyReply':
         void this.copyReply();
         break;
@@ -464,6 +550,8 @@ export class GuestLobbyScene implements Scene {
         audio.playSe('ui-cancel');
         this.connector?.cancel();
         this.connector = null;
+        this.roomConnector?.cancel();
+        this.roomConnector = null;
         this.localPhase = 'paste';
         this.session?.leave();
         this.session = null;
@@ -582,7 +670,11 @@ export class GuestLobbyScene implements Scene {
   private hint(phase: GuestPhase): string {
     switch (phase) {
       case 'paste':
-        return 'OPEN THE INVITE LINK FROM THE HOST, OR PASTE IT HERE (CTRL+V)';
+        return this.roomFallback
+          ? 'ASK THE HOST FOR AN INVITE CODE, THEN PASTE IT HERE (CTRL+V)'
+          : 'OPEN THE INVITE LINK FROM THE HOST, OR PASTE IT HERE (CTRL+V)';
+      case 'room':
+        return this.roomStatusText();
       case 'preparing':
         return 'MAKING YOUR REPLY CODE... (UP TO 5 SEC)';
       case 'waiting':
@@ -598,6 +690,18 @@ export class GuestLobbyScene implements Scene {
         return 'NOT CONNECTED. SEE THE GUIDE BELOW.';
       case 'closed':
         return 'DISCONNECTED. PRESS ENTER TO GO BACK.';
+    }
+  }
+
+  /** 共通リンクでつないでいる間の状態 */
+  private roomStatusText(): string {
+    switch (this.roomConnector?.phase) {
+      case 'waitingHost':
+        return 'WAITING FOR THE HOST...';
+      case 'connectingPeer':
+        return 'CONNECTING TO THE HOST...';
+      default:
+        return 'CONNECTING...';
     }
   }
 
@@ -637,6 +741,10 @@ export class GuestLobbyScene implements Scene {
 
   private renderSteps(ctx: CanvasRenderingContext2D, phase: GuestPhase): void {
     drawPanel(ctx, listX, listY, listW, 230);
+    if (this.method === 'room') {
+      this.renderRoomSteps(ctx, phase);
+      return;
+    }
     const steps = [
       '1. OPEN THE INVITE LINK FROM THE HOST (OR PASTE IT HERE)',
       '2. COPY YOUR REPLY CODE',
@@ -657,6 +765,22 @@ export class GuestLobbyScene implements Scene {
     }
   }
 
+  /** 共通リンクの手順 (開くだけ) */
+  private renderRoomSteps(ctx: CanvasRenderingContext2D, phase: GuestPhase): void {
+    const steps = ['1. OPEN THE INVITE LINK FROM THE HOST', '2. WAIT A FEW SECONDS WHILE IT CONNECTS', '3. YOU ARE IN THE LOBBY. WAIT FOR THE HOST TO START'];
+    const current = phase === 'paste' ? 0 : phase === 'room' || phase === 'failed' ? 1 : 2;
+    let y = listY + 12;
+    steps.forEach((s, i) => {
+      const color = i === current ? colors.white : i < current ? colors.midGrey : colors.subtext;
+      y += drawParagraph(ctx, s, listX + 12, y, listW - 24, { color }) + 8;
+    });
+    if (phase === 'paste') {
+      drawParagraph(ctx, 'NO REPLY CODE NEEDED. IF THE LINK DOES NOT WORK, THE HOST CAN SEND AN INVITE CODE INSTEAD.', listX + 12, y + 8, listW - 24, {
+        color: colors.subtext,
+      });
+    }
+  }
+
   private renderCodePanel(ctx: CanvasRenderingContext2D, ui: LobbyUi, phase: GuestPhase): void {
     drawPanel(ctx, codeX, codeY, codeW, codeH);
     const x = codeX + 10;
@@ -672,11 +796,21 @@ export class GuestLobbyScene implements Scene {
     const session = this.session;
     switch (phase) {
       case 'paste':
+        if (this.roomFallback) {
+          drawText(ctx, netTexts.askForCode, x, y, { color: colors.yellow });
+          drawParagraph(ctx, [guestRoomFallbackText(this.roomFallback), netTexts.askForCodeGuide], x, y + 22, w, { color: colors.text, maxLines: 3 });
+          break;
+        }
         drawText(ctx, 'PASTE THE INVITE LINK (OR CODE) FROM THE HOST', x, y, { color: colors.white });
         drawParagraph(ctx, 'OPENING THE LINK DOES THIS FOR YOU. OR PRESS CTRL+V ANYWHERE, SELECT "PASTE INVITE", OR PASTE INTO THE BOX BELOW.', x, y + 28, w, {
           color: colors.text,
         });
         drawParagraph(ctx, 'YOUR NAME AND TEAM CAN BE CHANGED ANY TIME ON THE LEFT.', x, codeY + 160, w, { color: colors.subtext });
+        break;
+      case 'room':
+        drawText(ctx, this.roomStatusText(), x, y, { color: colors.white });
+        drawParagraph(ctx, 'JOINING THE LOBBY WITH THE LINK FROM THE HOST. THIS USUALLY TAKES A FEW SECONDS.', x, y + 28, w, { color: colors.text });
+        drawParagraph(ctx, netTexts.roomGuestIpNote, x, codeY + 150, w, { color: colors.subtext });
         break;
       case 'preparing':
         drawText(ctx, 'PREPARING YOUR REPLY CODE... (UP TO 5 SEC)', x, y, { color: colors.white });
@@ -724,7 +858,12 @@ export class GuestLobbyScene implements Scene {
       case 'closed': {
         drawText(ctx, 'DISCONNECTED', x, y, { color: colors.red });
         const reason = session?.rejectReason;
-        const text = reason === 'version' || reason === 'raceInProgress' || reason === 'full' ? rejectText(reason) : closeText(session?.closeReason ?? null);
+        const text =
+          reason === 'version' || reason === 'raceInProgress' || reason === 'full'
+            ? rejectText(reason)
+            : session?.closeReason === 'hostClosed'
+              ? netTexts.hostClosedLobby
+              : netTexts.disconnectedFromLobby;
         drawParagraph(ctx, text, x, y + 28, w, { color: colors.text });
         break;
       }

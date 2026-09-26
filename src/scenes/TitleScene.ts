@@ -7,6 +7,7 @@ import type { LampImages } from '../ui/startLamps';
 import { drawText, measureText } from '../ui/text';
 import { GuestLobbyScene } from './GuestLobbyScene';
 import { clearInviteHandler, setInviteHandler } from './inviteRouter';
+import type { Invite } from './inviteRouter';
 import { MenuScene } from './MenuScene';
 import { wasMenuConfirmPressed } from './menuKeys';
 
@@ -51,7 +52,7 @@ export class TitleScene implements Scene {
   }
 
   /** 開いたまま招待リンクを開いたら、参加画面へ */
-  private readonly onInvite = (code: string) => this.game.changeScene(new GuestLobbyScene(this.game, null, code));
+  private readonly onInvite = (invite: Invite) => this.game.changeScene(new GuestLobbyScene(this.game, null, invite));
 
   enter(): void {
     this.game.audio.playBgm('menu-theme');

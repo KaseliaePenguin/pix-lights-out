@@ -1,4 +1,6 @@
 import type { AcceptReplyError, HostSlotFailure } from '../host/HostLobby';
+import type { HostRoomFailure } from '../host/HostRoom';
+import type { GuestRoomFailure } from '../net/GuestRoomConnector';
 import type { CloseReason } from '../net/Transport';
 import type { LinkCloseReason } from '../net/PeerLink';
 import type { CodeError } from '../shared/net/connectionCode';
@@ -44,6 +46,19 @@ export const netTexts = {
   noResponse: 'NO RESPONSE AFTER CONNECTING. RELOAD THE PAGE AND TRY AGAIN.',
   replyTimedOut: 'TIME IS UP. ASK THE HOST FOR A NEW INVITE LINK.',
   expired: 'EXPIRED. MAKE A NEW INVITE AND SEND THE LINK.',
+  /** ホストの共通リンク (中継、#room=) 用。リンク自体に IP アドレスは入らないが、つないだ相手には伝わる */
+  roomLinkWarning:
+    'THE LINK LETS ANYONE WHO HAS IT JOIN. SHARE IT ONLY WITH FRIENDS. ' +
+    'WHEN A PLAYER CONNECTS, YOUR INTERNET IP ADDRESS AND THEIRS ARE SHARED WITH EACH OTHER.',
+  /** 参加者が共通リンクでつないでいる間 */
+  roomGuestIpNote: 'CONNECTING SHARES YOUR INTERNET IP ADDRESS WITH THE HOST. JOIN ONLY LOBBIES OF PEOPLE YOU KNOW.',
+  relayUnavailable: 'RELAY UNAVAILABLE. USING INVITE CODES.',
+  /** 参加者がロビーで切断された (ホストに外された場合と見分けがつかない) */
+  disconnectedFromLobby: 'DISCONNECTED FROM THE LOBBY. THE CONNECTION WAS LOST, OR THE HOST REMOVED YOU.',
+  askForCode: 'ASK THE HOST FOR AN INVITE CODE',
+  /** 共通リンクが使えなかったときの、従来の方式への案内 */
+  askForCodeGuide:
+    'ASK THE HOST FOR A "CODE INVITE" LINK AND OPEN IT (OR PASTE IT BELOW). YOU WILL SEND A REPLY CODE BACK.',
 };
 
 /** 貼り付けたコードの形式の誤り。expected は待っているコードの種類 */
@@ -126,4 +141,46 @@ export function rejectText(reason: RejectReason): string {
 /** ロビー・レースでホストとの接続が切れた理由 */
 export function closeText(reason: CloseReason | null): string {
   return reason === 'hostClosed' ? netTexts.hostClosedLobby : netTexts.lostInLobby;
+}
+
+/** 参加者の共通リンク (#room=) の失敗のうち、従来の方式に切り替えるもの (shouldFallbackToCode が true) の理由 */
+export function guestRoomFallbackText(failure: GuestRoomFailure): string {
+  switch (failure) {
+    case 'relayUnavailable':
+      return 'COULD NOT REACH THE RELAY SERVER, SO THE LINK DID NOT WORK.';
+    case 'noRoom':
+      return 'THIS LINK IS NO LONGER OPEN (REPLACED, CLOSED OR EXPIRED).';
+    case 'timeout':
+      return 'THE HOST DID NOT ANSWER.';
+    default:
+      return 'THE RELAY SERVER DROPPED THE CONNECTION.';
+  }
+}
+
+/** 参加者の共通リンク (#room=) の失敗のうち、方式を変えても同じもの */
+export function guestRoomFailureLines(failure: GuestRoomFailure, isSamePublicAddress: boolean): readonly string[] {
+  switch (failure) {
+    case 'full':
+      return [rejectText('full')];
+    case 'version':
+      return [codeErrorText('version', 'invite')];
+    case 'invalidLink':
+      return ['THE INVITE LINK IS BROKEN. ASK THE HOST TO SEND IT AGAIN.'];
+    default:
+      return connectFailedLines(isSamePublicAddress);
+  }
+}
+
+/** ホストの共通リンク (中継の部屋) が使えなくなった理由 */
+export function hostRoomFailureText(failure: HostRoomFailure | null): string {
+  switch (failure) {
+    case 'expired':
+      return 'THE LINK EXPIRED (30 MIN). SELECT "NEW LINK" TO MAKE A NEW ONE.';
+    case 'replaced':
+      return 'THIS LOBBY LINK WAS OPENED AS HOST IN ANOTHER TAB. SELECT "NEW LINK".';
+    case 'lost':
+      return 'LOST THE CONNECTION TO THE RELAY. ' + netTexts.relayUnavailable;
+    default:
+      return netTexts.relayUnavailable;
+  }
 }
