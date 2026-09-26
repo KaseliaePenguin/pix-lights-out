@@ -1,19 +1,8 @@
+import type { RaceGap } from '../shared/raceGap';
 import { formatLapTime } from './format';
 
-/**
- * 前車・先頭とのタイム差の表示内容 (game-design.md 7.5 節・10.1 節)。
- * - time: 秒 (正 = 相手より遅れている)
- * - laps: 周回遅れ (n 周)
- * - leader / pit / out: 先頭・ピットレーン内・リタイア
- * - none: まだ差が出ていない (スタート直後など)
- */
-export type RaceGap =
-  | { kind: 'time'; seconds: number }
-  | { kind: 'laps'; laps: number }
-  | { kind: 'leader' }
-  | { kind: 'pit' }
-  | { kind: 'out' }
-  | { kind: 'none' };
+/** 型は src/shared/raceGap.ts (レースのセッションが作る) */
+export type { RaceGap };
 
 /**
  * 差を最大 7 文字にする (順位表の差の欄 x86-170 に収まる幅)。

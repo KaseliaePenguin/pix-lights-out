@@ -94,5 +94,6 @@ export const course1: TrackData = {
     entryPoint: 1,
     exitPoint: 5,
   },
-  referenceLapTime: null,
+  // 腕前 1.0 の CPU (ミス・個体差なし、ソフト、DRS は区間内で自由) の実測 (scripts/sim-lap.mjs、physicsVersion 3)
+  referenceLapTime: 36.42,
 };

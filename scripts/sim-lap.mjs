@@ -21,6 +21,12 @@ export { LineFollowerAi } from './src/shared/LineFollowerAi';
 export { TimeAttackSession } from './src/shared/TimeAttackSession';
 export { GhostPlayer, GhostRecorder } from './src/shared/ghost';
 export { VirtualGearbox } from './src/shared/VirtualGearbox';
+export { RaceSession } from './src/shared/RaceSession';
+export { CpuDriver, createCpuSurroundings } from './src/shared/CpuDriver';
+export { ContactSystem } from './src/shared/ContactSystem';
+export { detectContact } from './src/shared/carContact';
+export { Random } from './src/shared/Random';
+export { cpuParams } from './src/shared/carParams';
 `;
 const bundle = await build({
   stdin: { contents: entry, resolveDir: root, loader: 'ts' },
@@ -596,6 +602,354 @@ const readyTimeAttack = () => {
   const seq = [];
   for (let v = 0; v <= 620; v += 5) { gb.update(v); if (gb.shiftedUp) seq.push(`${gb.gear}@${v}`); }
   console.log(`\n== 仮想ギア ==\n  シフトアップ: ${seq.join(' ')} / 525 px/秒 = ${Math.round(525 * 0.6)} km/h`);
+}
+
+// ---------------------------------------------------------------- M2: CPU・決勝
+console.log('\n== CPU の基準ラップ (腕前 1.0、個体差・ミスなし、DRS は区間内で自由) ==');
+const raceLine = new m.RacingLine(track, { tyreGrip: 1.08 });
+{
+  const refParams = { ...m.cpuParams, skillSpread: 0, difficulties: { ...m.cpuParams.difficulties, hard: { ...m.cpuParams.difficulties.hard, skill: 1.0, mistakeRate: 0 } } };
+  const session = new m.TimeAttackSession(track, null);
+  const driver = new m.CpuDriver(raceLine, track, 'hard', new m.Random(1), 1.08, refParams);
+  const env = m.createCpuSurroundings(1);
+  env.canDrive = true;
+  env.timeSinceStart = 99;
+  const c = m.createControls();
+  const laps = [];
+  for (let i = 0; i < 60 * 200 && laps.length < 3; i++) {
+    driver.update(session.car, env, dt, c);
+    for (const e of session.step(c, dt)) if (e.type === 'lapCompleted') laps.push(e.time);
+  }
+  const ref = Math.min(...laps);
+  console.log(`  ラップ ${laps.map(fmt).join(' / ')} (速度プロファイルの目安 ${fmt(driver.estimatedLapTime)}) / コースデータの referenceLapTime: ${track.referenceLapTime ?? 'null'}`);
+  check(laps.length === 3, 'CPU (腕前 1.0) が 3 周を走りきる');
+  if (track.referenceLapTime !== null) {
+    check(Math.abs(track.referenceLapTime - ref) < 0.3, 'referenceLapTime が実測と 0.3 秒以内', `実測 ${ref.toFixed(3)}`);
+  }
+}
+
+/** 決勝を最後まで走らせて、統計と結果を返す */
+function runRace({ seed, difficulty, cpuCount = 8, laps = 3, maxTime = 400, trackOverlap = true }) {
+  const session = new m.RaceSession({ track, totalLaps: laps, playerCarNumber: null, cpuCount, difficulty, seed, racingLine: raceLine });
+  const st = {
+    contacts: 0, hardContacts: 0, spins: 0, resets: 0, blueFlags: 0, drsAvailable: 0, drsOpened: 0,
+    slipFrames: 0, overtakes: 0, nanFrames: 0, maxWallDepth: 0, inWallFrames: 0, maxCarOverlap: 0, mistakes: 0,
+    jumpStarts: 0, missed: 0, finalLap: 0, checkered: 0, lampOn: 0, lightsOutAt: NaN,
+  };
+  const lapTimes = new Map(session.cars.map((rc) => [rc.carNumber, []]));
+  const probe = { depth: 0, normalX: 0, normalY: 0 };
+  const pt = { x: 0, y: 0 };
+  const outline = [[-9, 19], [9, 19], [-9, -19], [9, -19], [-9, 0], [9, 0]];
+  const cr = { depth: 0, nx: 0, ny: 0, x: 0, y: 0 };
+  let prevOrder = session.orderNumbers.join(',');
+  const wasMistaking = new Map();
+  let finishedAt = NaN;
+  let t = 0;
+  while (t < maxTime) {
+    const evs = session.step(null, dt);
+    t += dt;
+    for (const e of evs) {
+      switch (e.type) {
+        case 'contact': st.contacts++; if (e.impact >= 187.5) st.hardContacts++; break;
+        case 'resetStarted': st.resets++; break;
+        case 'blueFlag': st.blueFlags++; break;
+        case 'drsAvailable': st.drsAvailable++; break;
+        case 'drsOpened': st.drsOpened++; break;
+        case 'jumpStart': st.jumpStarts++; break;
+        case 'finalLap': st.finalLap++; break;
+        case 'checkeredFlag': st.checkered++; break;
+        case 'lampOn': st.lampOn++; break;
+        case 'lightsOut': st.lightsOutAt = session.time; break;
+        case 'lapResult': lapTimes.get(e.carNumber).push(e.time); break;
+        case 'lap': if (e.event.type === 'checkpointMissed') st.missed++; break;
+        default: break;
+      }
+    }
+    for (const rc of session.cars) {
+      const car = rc.car;
+      if (car.spinStarted) st.spins++;
+      if (car.fSlip > 0.5) st.slipFrames++;
+      if (rc.driver) {
+        if (rc.driver.isMistaking && !wasMistaking.get(rc.carNumber)) st.mistakes++;
+        wasMistaking.set(rc.carNumber, rc.driver.isMistaking);
+      }
+      if (![car.x, car.y, car.heading, car.sF, car.sR, car.vx, car.vy, rc.distance].every(Number.isFinite)) st.nanFrames++;
+      for (const k of outline) {
+        car.localToWorld(k[0], k[1], pt);
+        track.wallContact(pt.x, pt.y, probe);
+        st.maxWallDepth = Math.max(st.maxWallDepth, probe.depth);
+      }
+      if (track.surfaceCodeAt(car.x, car.y) === m.SurfaceCode.wall) st.inWallFrames++;
+    }
+    if (trackOverlap) {
+      for (let i = 0; i < session.cars.length; i++) {
+        for (let j = i + 1; j < session.cars.length; j++) {
+          if (session.isGhostPair(i, j)) continue;
+          if (m.detectContact(session.cars[i].car, session.cars[j].car, cr)) st.maxCarOverlap = Math.max(st.maxCarOverlap, cr.depth);
+        }
+      }
+    }
+    const order = session.orderNumbers.join(',');
+    if (order !== prevOrder && session.phase === 'racing' && session.raceTime > 0) {
+      const a = prevOrder.split(',');
+      const b = order.split(',');
+      for (let i = 0; i < b.length; i++) if (a.indexOf(b[i]) > i) st.overtakes++;
+    }
+    prevOrder = order;
+    if (session.phase === 'finished') { finishedAt = t; break; }
+  }
+  return { session, st, lapTimes, finishedAt };
+}
+
+function printRace(label, r) {
+  const { session, st, lapTimes } = r;
+  console.log(`\n== ${label} ==`);
+  console.log(`  消灯 ${st.lightsOutAt.toFixed(2)} 秒 (ランプ ${st.lampOn} 回) / 結果確定 ${Number.isFinite(r.finishedAt) ? r.finishedAt.toFixed(1) + ' 秒' : '未確定'}`);
+  console.log('  順位 車番 腕前   反応   状態            総タイム    差          ベスト     各周');
+  for (const res of session.results) {
+    const rc = session.carByNumber(res.carNumber);
+    const gap = res.gapToWinner.kind === 'time' ? `+${res.gapToWinner.seconds.toFixed(3)}` : res.gapToWinner.kind === 'laps' ? `+${res.gapToWinner.laps} LAP` : res.gapToWinner.kind.toUpperCase();
+    console.log(`  P${res.position}   #${res.carNumber}   ${rc.driver ? rc.driver.skill.toFixed(3) : '-'}  ${rc.reactionTime?.toFixed(2) ?? '-'}   ${res.status.padEnd(13)} ${fmt(res.totalTime).padStart(9)}  ${gap.padEnd(10)}  ${fmt(res.bestLap)}  ${lapTimes.get(res.carNumber).map(fmt).join(' ')}  (グリッド ${rc.gridSlot + 1})`);
+  }
+  console.log(`  接触 ${st.contacts} 回 (強い 187.5 以上 ${st.hardContacts}) / スピン ${st.spins} / コース復帰 ${st.resets} / コーナーのミス ${st.mistakes} / 順位の入れ替わり ${st.overtakes}`);
+  console.log(`  DRS 使用権 ${st.drsAvailable} 回・開いた ${st.drsOpened} 回 / スリップストリーム (fSlip>0.5) ${(st.slipFrames * dt).toFixed(1)} 台秒 / BLUE FLAG ${st.blueFlags} / FINAL LAP ${st.finalLap} / チェッカー ${st.checkered}`);
+  console.log(`  壁の最大めり込み ${st.maxWallDepth.toFixed(2)} px / 壁の中 ${st.inWallFrames} フレーム / 車同士の重なり (解決後) 最大 ${st.maxCarOverlap.toFixed(2)} px / NaN ${st.nanFrames} / 未通過 ${st.missed}`);
+}
+
+// 難易度ごと: 1 台だけで走らせたラップ (他車の影響なし)
+console.log('\n== CPU の難易度ごとのラップ (1 台で 4 周、2〜4 周目。seed 1〜3) ==');
+for (const difficulty of ['easy', 'normal', 'hard']) {
+  const all = [];
+  let mistakes = 0;
+  for (const seed of [1, 2, 3]) {
+    const r = runRace({ seed, difficulty, cpuCount: 1, laps: 4, trackOverlap: false });
+    all.push(...r.lapTimes.get(r.session.cars[0].carNumber).slice(1));
+    mistakes += r.st.mistakes;
+  }
+  const avg = all.reduce((a, b) => a + b, 0) / all.length;
+  console.log(`  ${difficulty.padEnd(6)}: 平均 ${fmt(avg)} / 最速 ${fmt(Math.min(...all))} / 最遅 ${fmt(Math.max(...all))} / ミス ${mistakes} 回 (12 周)`);
+}
+
+t0 = performance.now();
+const raceA = runRace({ seed: 12345, difficulty: 'normal' });
+const raceMs = performance.now() - t0;
+printRace(`8 台・3 周・NORMAL (seed 12345、計算 ${raceMs.toFixed(0)} ms)`, raceA);
+const allClassified = raceA.session.results.length === 8 && raceA.session.results.every((r) => r.status === 'finished');
+check(raceA.session.phase === 'finished' && allClassified, '8 台で 3 周のレースが最後まで終わり、全車完走');
+check(raceA.st.nanFrames === 0, '接触があっても NaN にならない');
+check(raceA.st.maxWallDepth < 2 && raceA.st.inWallFrames === 0, '決勝で壁を突き抜けない', `最大めり込み ${raceA.st.maxWallDepth.toFixed(2)} px`);
+check(raceA.st.maxCarOverlap < 3, '車同士の重なりが残らない (接触処理のあと 3 px 未満)', `${raceA.st.maxCarOverlap.toFixed(2)} px`);
+check(raceA.st.lampOn === 5 && raceA.st.lightsOutAt >= 5.5 && raceA.st.lightsOutAt <= 7.5 + dt, 'ランプ 5 回点灯、消灯は 5.5〜7.5 秒', `${raceA.st.lightsOutAt.toFixed(2)} 秒`);
+check(raceA.st.jumpStarts === 0, 'CPU はフライングしない');
+check(raceA.st.finalLap === 1 && raceA.st.checkered === 1, 'FINAL LAP・チェッカーが 1 回ずつ');
+
+const raceB = runRace({ seed: 12345, difficulty: 'normal' });
+const sig = (r) => JSON.stringify(r.session.results) + r.session.cars.map((rc) => `${rc.car.x},${rc.car.y},${rc.car.heading}`).join(';');
+check(sig(raceA) === sig(raceB), '同じ seed なら結果と最後の位置が完全に一致する');
+const raceC = runRace({ seed: 999, difficulty: 'normal' });
+check(sig(raceA) !== sig(raceC), '別の seed なら結果が変わる');
+
+for (const [difficulty, seed] of [['easy', 7], ['hard', 8], ['hard', 9]]) {
+  const r = runRace({ seed, difficulty });
+  printRace(`8 台・3 周・${difficulty.toUpperCase()} (seed ${seed})`, r);
+  check(r.session.phase === 'finished' && r.st.nanFrames === 0 && r.st.inWallFrames === 0 && r.st.maxCarOverlap < 3,
+    `${difficulty} seed ${seed}: 最後まで終わり、NaN・壁の突き抜け・重なりなし`);
+}
+
+// ---------------------------------------------------------------- 接触の単体の確認
+console.log('\n== 車同士の接触 (単体) ==');
+{
+  // 追突: 止まっている車に 500 px/秒 で突っ込んでも、前後が入れ替わらない (すり抜けない)
+  const cs = new m.ContactSystem(2);
+  const s0 = track.drsStartS + 300;
+  const a = new m.Car(track);
+  const b = new m.Car(track);
+  a.placeAt(track.poseAt(s0 - 120, 0));
+  b.placeAt(track.poseAt(s0, 0));
+  a.sF = 500;
+  const idle = m.createControls();
+  let impact = 0;
+  let spin = false;
+  for (let i = 0; i < 90; i++) {
+    a.update(idle, dt);
+    b.update(idle, dt);
+    for (const e of cs.step([a, b], () => false, i * dt)) { impact = Math.max(impact, e.impact); spin ||= e.spinA; }
+  }
+  const pa = track.project(a.x, a.y, -1).s;
+  const pb = track.project(b.x, b.y, -1).s;
+  check(pa < pb && impact > 0, '追突しても前後が入れ替わらない', `衝撃 ${impact.toFixed(0)} px/秒、当てた側のスピン ${spin}、差 ${(pb - pa).toFixed(1)} px`);
+  check(b.sF <= 500 + 1e-6, '当てられた側が当てた側より速くならない', `当てられた側 ${b.sF.toFixed(0)} px/秒・当てた側 ${a.sF.toFixed(0)} px/秒`);
+}
+{
+  // 横から壁に押し付ける: 壁際の車に斜めから当てても、どちらも壁を突き抜けない
+  let worst = 0;
+  let inWall = 0;
+  let nan = 0;
+  for (const s0 of [1000, 4000, 8000, 12000, 15000]) {
+    for (const side of [-1, 1]) {
+      const cs = new m.ContactSystem(2);
+      const a = new m.Car(track);
+      const b = new m.Car(track);
+      // 壁の手前 14 px (車の半幅 9 + 5) に B を置く
+      let wallLat = track.widthAt(s0) / 2;
+      for (; wallLat < 400; wallLat += 2) {
+        const q = track.poseAt(s0, side * wallLat);
+        if (track.wallDistance(q.x, q.y) > -14) break;
+      }
+      const pb = track.poseAt(s0, side * wallLat);
+      b.placeAt(pb);
+      const pa = track.poseAt(s0 - 60, side * (wallLat - 45));
+      a.placeAt({ x: pa.x, y: pa.y, heading: pa.heading + side * 0.6 });
+      a.sF = 450;
+      const idle = m.createControls();
+      for (let i = 0; i < 120; i++) {
+        a.update(idle, dt);
+        b.update(idle, dt);
+        cs.step([a, b], () => false, i * dt);
+        for (const car of [a, b]) {
+          if (![car.x, car.y, car.sF, car.sR].every(Number.isFinite)) nan++;
+          if (track.surfaceCodeAt(car.x, car.y) === m.SurfaceCode.wall) inWall++;
+          for (const k of [[-9, 19], [9, 19], [-9, -19], [9, -19]]) {
+            const p2 = car.localToWorld(k[0], k[1], { x: 0, y: 0 });
+            worst = Math.max(worst, track.wallDistance(p2.x, p2.y));
+          }
+        }
+      }
+    }
+  }
+  check(inWall === 0 && worst < 3 && nan === 0, '壁際で横から押し付けても壁を突き抜けない', `角の最大めり込み ${worst.toFixed(2)} px、壁の中 ${inWall}、NaN ${nan}`);
+}
+{
+  // 0.2 秒以内の再衝撃は押し戻しだけ / ゴーストの組は判定しない
+  const cs = new m.ContactSystem(2);
+  const a = new m.Car(track);
+  const b = new m.Car(track);
+  const s0 = track.drsStartS + 300;
+  a.placeAt(track.poseAt(s0 - 30, 0));
+  b.placeAt(track.poseAt(s0, 0));
+  a.sF = 300;
+  const n1 = cs.step([a, b], () => false, 0).length;
+  a.placeAt(track.poseAt(s0 - 30, 0));
+  a.sF = 300;
+  const n2 = cs.step([a, b], () => false, 0.1).length;
+  a.placeAt(track.poseAt(s0 - 30, 0));
+  a.sF = 300;
+  const n3 = cs.step([a, b], () => false, 0.35).length;
+  a.placeAt(track.poseAt(s0 - 30, 0));
+  const beforeX = a.x;
+  const n4 = cs.step([a, b], () => true, 1).length;
+  check(n1 === 1 && n2 === 0 && n3 === 1, '同じ 2 台の 0.2 秒以内の再衝撃は出ない (押し戻しだけ)', `${n1} / ${n2} / ${n3}`);
+  check(n4 === 0 && a.x === beforeX, 'ゴーストの組み合わせは判定しない');
+}
+{
+  // スリップストリーム: 前の車の真後ろ 100 px を 400 px/秒 で走ると fSlip が上がり、横にずれると上がらない
+  const s0 = track.drsStartS + 200;
+  const run = (lateral) => {
+    const session = new m.RaceSession({ track, totalLaps: 3, playerCarNumber: 1, cpuCount: 1, difficulty: 'normal', seed: 5, racingLine: raceLine });
+    const [lead, follow] = [session.cars[0], session.cars[1]];
+    while (session.phase === 'grid') session.step(null, dt);
+    let maxSlip = 0;
+    for (let i = 0; i < 40; i++) {
+      lead.car.placeAt(track.poseAt(s0 + i * 6, 0));
+      lead.car.sF = 360;
+      follow.car.placeAt(track.poseAt(s0 - 100 + i * 6, lateral));
+      follow.car.sF = 360;
+      session.step(null, dt);
+      maxSlip = Math.max(maxSlip, follow.car.fSlip);
+    }
+    return maxSlip;
+  };
+  const behind = run(0);
+  const offset = run(60);
+  check(behind > 0.9 && offset === 0, 'スリップストリームは真後ろで効き、横にずれると効かない', `真後ろ ${behind.toFixed(2)} / 横 60 px ${offset.toFixed(2)}`);
+}
+{
+  // フライングと反応時間: プレイヤーがランプ点灯中に発進するとフライング (+3 秒)
+  const session = new m.RaceSession({ track, totalLaps: 3, playerCarNumber: 1, cpuCount: 3, difficulty: 'normal', seed: 3, racingLine: raceLine });
+  const c = m.createControls();
+  const evs = [];
+  for (let i = 0; i < 60 * 3; i++) {
+    c.throttle = session.time > 2 ? 1 : 0;
+    for (const e of session.step(c, dt)) evs.push(e);
+  }
+  const jump = evs.filter((e) => e.type === 'jumpStart');
+  check(jump.length === 1 && jump[0].carNumber === 1 && session.player.penalty === 3, 'グリッドで動くとフライングが 1 回だけ成立し +3 秒');
+  check(session.player.gridSlot === session.cars.length - 1, '予選スキップではプレイヤーが最後尾');
+  // プレイヤーがリタイアすると、その場で結果が確定する (CPU は推定)
+  session.retire(1);
+  const r = session.step(c, dt);
+  const player = session.results.find((x) => x.isPlayer);
+  check(session.phase === 'finished' && r.some((e) => e.type === 'raceFinished') && player.status === 'retired' && player.position === session.results.length,
+    'プレイヤーのリタイアで結果が確定し、リタイアは最後');
+}
+{
+  // 1 人用: プレイヤー (CPU の運転を借りる) がゴールした時点で残りの CPU を推定して確定する
+  const session = new m.RaceSession({ track, totalLaps: 2, playerCarNumber: 4, cpuCount: 7, difficulty: 'easy', seed: 11, racingLine: raceLine });
+  const pilot = new m.CpuDriver(raceLine, track, 'hard', new m.Random(77), 1.08);
+  const env = m.createCpuSurroundings(8);
+  const c = m.createControls();
+  let finishedEvent = null;
+  let t = 0;
+  while (session.phase !== 'finished' && t < 200) {
+    env.othersCount = 0;
+    for (const rc of session.cars) if (!rc.isPlayer && !session.isGhostPair(rc.index, session.player.index)) env.others[env.othersCount++] = rc.car;
+    env.canDrive = session.phase !== 'grid';
+    env.timeSinceStart = session.raceTime;
+    pilot.update(session.player.car, env, dt, c);
+    for (const e of session.step(c, dt)) if (e.type === 'carFinished' && e.carNumber === 4) finishedEvent = e;
+    t += dt;
+  }
+  const res = session.results;
+  const player = res.find((x) => x.isPlayer);
+  console.log(`  1 人用 (プレイヤー役は HARD の CPU、相手は EASY 7 台、2 周): プレイヤー P${player.position} ${fmt(player.totalTime)} / 推定 ${res.filter((x) => x.isEstimated).length} 台 / 確定 ${t.toFixed(1)} 秒`);
+  check(session.phase === 'finished' && finishedEvent !== null && finishedEvent.position === player.position && res.length === 8,
+    '1 人用: プレイヤーのゴールで全車の結果が確定する (carFinished の順位 = 確定順位)');
+  check(res.every((x, i) => i === 0 || x.status !== 'finished' || res[i - 1].status !== 'finished' || res[i - 1].lapsCompleted > x.lapsCompleted || res[i - 1].totalTime <= x.totalTime),
+    '結果が周回数とタイム + ペナルティの順に並ぶ');
+}
+
+{
+  // 周回遅れ: 止まったままのプレイヤーを CPU が周回遅れにする。後ろ 190 px で BLUE FLAG、すり抜けて接触しない
+  const session = new m.RaceSession({ track, totalLaps: 3, playerCarNumber: 2, cpuCount: 1, difficulty: 'hard', seed: 21, racingLine: raceLine });
+  const idle = m.createControls();
+  let blueAt = -1;
+  let contacts = 0;
+  let gapBefore = null;
+  let lappedGap = null;
+  const cpu = session.cars[0];
+  for (let i = 0; i < 60 * 60 && lappedGap === null; i++) {
+    for (const e of session.step(idle, dt)) {
+      if (e.type === 'blueFlag' && e.carNumber === 2 && blueAt < 0) {
+        blueAt = session.player.distance - cpu.distance + track.length;
+        gapBefore = session.player.gapToLeader;
+      }
+      if (e.type === 'contact') contacts++;
+    }
+    if (cpu.distance - session.player.distance >= track.length) lappedGap = session.player.gapToLeader;
+  }
+  check(blueAt > 0 && blueAt <= 190 + 12, '周回遅れにされる車に、後ろ 190 px 以内で BLUE FLAG', `${blueAt.toFixed(0)} px`);
+  check(contacts === 0 && lappedGap?.kind === 'laps' && lappedGap.laps === 1, '周回遅れの組み合わせはすり抜け、差は +1 LAP', `接触 ${contacts}、差 ${JSON.stringify(lappedGap)}`);
+}
+{
+  // コース復帰: 止まって R → 置き直し → 1.5 秒後に操作再開、その後 3 秒はゴースト (全車とすり抜け)
+  const session = new m.RaceSession({ track, totalLaps: 3, playerCarNumber: 1, cpuCount: 2, difficulty: 'normal', seed: 4, racingLine: raceLine });
+  const c = m.createControls();
+  while (session.phase === 'grid') session.step(c, dt);
+  for (let i = 0; i < 90; i++) session.step(c, dt);
+  const types = [];
+  c.resetPressed = true;
+  let ghostDuring = true;
+  let finishedAt = -1;
+  let ghostEnd = -1;
+  for (let i = 0; i < 60 * 7; i++) {
+    for (const e of session.step(c, dt)) if (e.carNumber === 1 && e.type.startsWith('reset')) { types.push(e.type); if (e.type === 'resetFinished') finishedAt = session.time; }
+    c.resetPressed = false;
+    const p = session.player;
+    if (types.includes('resetPlaced') && finishedAt < 0 && !session.isGhostPair(p.index, 0)) ghostDuring = false;
+    if (finishedAt > 0 && ghostEnd < 0 && !p.isGhost) ghostEnd = session.time - finishedAt;
+  }
+  check(types.join(',') === 'resetStarted,resetPlaced,resetFinished' && ghostDuring, 'コース復帰の手順が進み、置き直しから操作再開まではゴースト', types.join(','));
+  check(ghostEnd >= 3 - dt && ghostEnd < 3.2, '操作再開から 3 秒でゴーストが終わる', `${ghostEnd.toFixed(2)} 秒`);
 }
 
 console.log(failures === 0 ? '\nすべての確認が OK' : `\nNG が ${failures} 件`);
