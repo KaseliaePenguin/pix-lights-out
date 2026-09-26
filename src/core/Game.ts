@@ -1,12 +1,23 @@
 import { Assets } from './Assets';
 import { AudioManager } from './AudioManager';
 import { Input } from './Input';
+import { PointerInput } from './PointerInput';
 import type { Scene } from './Scene';
+import { ScreenFit } from './ScreenFit';
+import { TouchPad } from './TouchPad';
 
 /** ゲーム全体を管理し、固定タイムステップでメインループを回す */
 export class Game {
   readonly ctx: CanvasRenderingContext2D;
   readonly input: Input;
+  /** マウス・タッチ (メニューのタップ、タッチの端末かどうか) */
+  readonly pointer: PointerInput;
+  /** Canvas の表示サイズ・画面の向き */
+  readonly screen: ScreenFit;
+  /** 走行中の画面のボタン (タッチの端末だけ) */
+  readonly touchPad: TouchPad;
+  /** 縦向きのとき (ROTATE YOUR PHONE) に、シーンの上に描くもの (main.ts で設定する) */
+  rotateNoticePainter: ((ctx: CanvasRenderingContext2D) => void) | null = null;
   readonly assets = new Assets();
   readonly audio: AudioManager;
   readonly width: number;
@@ -25,6 +36,9 @@ export class Game {
     this.width = canvas.width;
     this.height = canvas.height;
     this.input = new Input(window);
+    this.pointer = new PointerInput(canvas);
+    this.screen = new ScreenFit(canvas, this.pointer);
+    this.touchPad = new TouchPad(this.pointer, this.screen);
     this.audio = new AudioManager(this.assets);
     // 最初のキー入力で AudioContext を resume し、タブが隠れている間は止める
     this.audio.attach(window);
@@ -32,6 +46,7 @@ export class Game {
 
   changeScene(next: Scene): void {
     this.scene?.exit?.();
+    this.pointer.clearTaps();
     this.scene = next;
     this.scene.enter?.();
   }
@@ -58,9 +73,13 @@ export class Game {
     this.accumulator += dt;
 
     this.isClockReset = false;
+    // 縦向きの間はタップを受け付けない (走行シーンは isRotateNeeded を見てポーズを開く)
+    this.pointer.isBlocked = this.screen.isRotateNeeded;
     while (this.accumulator >= this.step) {
       this.scene?.update(this.step);
       this.input.endFrame();
+      this.pointer.endFrame();
+      this.touchPad.endFrame();
       if (this.isClockReset) {
         this.accumulator = 0;
         break;
@@ -70,6 +89,8 @@ export class Game {
 
     this.ctx.clearRect(0, 0, this.width, this.height);
     this.scene?.render(this.ctx);
+    if (this.screen.isRotateNeeded) this.rotateNoticePainter?.(this.ctx);
+    this.touchPad.present();
 
     requestAnimationFrame(this.loop);
   };

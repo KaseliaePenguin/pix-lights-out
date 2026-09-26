@@ -2,11 +2,11 @@ import type { Game } from '../core/Game';
 import type { Scene } from '../core/Scene';
 import { colors } from '../ui/colors';
 import { drawMenuList } from '../ui/menuList';
-import type { MenuItemView } from '../ui/menuList';
+import type { MenuItemView, MenuListLayout } from '../ui/menuList';
 import { drawPanel } from '../ui/panel';
 import { drawParagraph } from '../ui/paragraph';
 import { drawText } from '../ui/text';
-import { moveMenuCursor, wasMenuBackPressed, wasMenuConfirmPressed, wasMenuDownPressed, wasMenuUpPressed } from './menuKeys';
+import { moveMenuCursor, tappedMenuRow, wasMenuBackPressed, wasMenuConfirmPressed, wasMenuDownPressed, wasMenuUpPressed } from './menuKeys';
 import { SettingsScene } from './SettingsScene';
 
 export interface NetPauseActions {
@@ -48,7 +48,12 @@ export class NetPauseScene implements Scene {
       return;
     }
     const { input, audio } = this.game;
-    if (wasMenuUpPressed(input)) {
+    const tapped = tappedMenuRow(this.game, this.listLayout(), this.items.length);
+    if (tapped >= 0) {
+      if (tapped !== this.selected) this.isLeaveArmed = false;
+      this.selected = tapped;
+      this.confirm();
+    } else if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, this.items.length);
       this.isLeaveArmed = false;
       audio.playSe('ui-cursor');
@@ -69,14 +74,12 @@ export class NetPauseScene implements Scene {
       this.child.render(ctx);
       return;
     }
-    const { width, height } = this.game;
-    const panelH = 64 + this.items.length * rowH + 64;
-    const x = (width - panelW) / 2;
-    const y = Math.round((height - panelH) / 4) * 2;
+    const { width } = this.game;
+    const { x, y, h: panelH } = this.panelRect();
     drawPanel(ctx, x, y, panelW, panelH);
     drawText(ctx, 'MENU', width / 2, y + 16, { scale: 4, color: colors.white, align: 'center' });
     const views: MenuItemView[] = this.items.map((item) => ({ label: this.labels[item], isEnabled: true }));
-    drawMenuList(ctx, views, this.selected, { x: x + 8, y: y + 60, width: panelW - 16, rowHeight: rowH });
+    drawMenuList(ctx, views, this.selected, this.listLayout());
     const noteY = y + 60 + this.items.length * rowH + 8;
     const note = this.isLeaveArmed
       ? this.isHost
@@ -84,6 +87,17 @@ export class NetPauseScene implements Scene {
         : 'PRESS AGAIN TO LEAVE. YOU WILL NEED A NEW INVITE LINK.'
       : 'THE RACE KEEPS GOING WHILE THIS MENU IS OPEN.';
     drawParagraph(ctx, note, x + 12, noteY, panelW - 24, { color: this.isLeaveArmed ? colors.yellow : colors.subtext });
+  }
+
+  private panelRect(): { x: number; y: number; h: number } {
+    const { width, height } = this.game;
+    const h = 64 + this.items.length * rowH + 64;
+    return { x: (width - panelW) / 2, y: Math.round((height - h) / 4) * 2, h };
+  }
+
+  private listLayout(): MenuListLayout {
+    const { x, y } = this.panelRect();
+    return { x: x + 8, y: y + 60, width: panelW - 16, rowHeight: rowH };
   }
 
   private confirm(): void {

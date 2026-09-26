@@ -1,6 +1,10 @@
 import type { Controls } from '../shared/controls';
 import { clearControls, createControls } from '../shared/controls';
 import type { Input } from './Input';
+import type { TouchButton } from './TouchPad';
+
+/** 入力元の種類。メッセージの出し分け (PRESS R / PRESS Y / TAP R) に使う */
+export type ControlSourceKind = 'keyboard' | 'gamepad' | 'touch';
 
 /**
  * 車への入力 (Controls) を作る入力元。キーボード・ゲームパッド (M3) をこの形で実装し、ControlsReader に渡す。
@@ -12,7 +16,7 @@ export interface ControlSource {
   /** 使える状態か (ゲームパッドが接続されているかなど) */
   readonly isConnected: boolean;
   /** メッセージの出し分けなど (PRESS R / PRESS Y) に使う */
-  readonly kind: 'keyboard' | 'gamepad';
+  readonly kind: ControlSourceKind;
 }
 
 export interface KeyBindings {
@@ -62,6 +66,35 @@ export class KeyboardControlSource implements ControlSource {
   }
 }
 
+/** 画面のボタンの状態 (TouchPad が実装する) */
+export interface TouchButtonState {
+  /** ボタンを出しているか */
+  readonly isActive: boolean;
+  isHeld(button: TouchButton): boolean;
+  wasPressed(button: TouchButton): boolean;
+}
+
+/** 画面のボタンの入力元 (game-design.md 5.4 節)。ボタンを出していない間は何も入力しない */
+export class TouchControlSource implements ControlSource {
+  readonly kind = 'touch';
+
+  constructor(private readonly pad: TouchButtonState) {}
+
+  get isConnected(): boolean {
+    return this.pad.isActive;
+  }
+
+  read(out: Controls): void {
+    const pad = this.pad;
+    out.throttle = pad.isHeld('throttle') ? 1 : 0;
+    out.brake = pad.isHeld('brake') ? 1 : 0;
+    out.steerInput = (pad.isHeld('right') ? 1 : 0) - (pad.isHeld('left') ? 1 : 0);
+    out.steerIsAnalog = false;
+    out.drsPressed = pad.wasPressed('drs');
+    out.resetPressed = pad.wasPressed('reset');
+  }
+}
+
 /**
  * 複数の入力元をまとめて 1 つの Controls にする (game-design.md 5.2 節)。
  * アクセル・ブレーキは大きい方、ステアは絶対値が大きい方 (その入力元のアナログ/デジタルの区別も引き継ぐ)、
@@ -71,7 +104,7 @@ export class ControlsReader {
   private readonly sources: ControlSource[] = [];
   private readonly scratch = createControls();
   /** 最後に操作があった入力元の種類 */
-  lastUsedKind: 'keyboard' | 'gamepad' = 'keyboard';
+  lastUsedKind: ControlSourceKind = 'keyboard';
 
   constructor(sources: ControlSource[] = []) {
     for (const s of sources) this.sources.push(s);
@@ -79,6 +112,11 @@ export class ControlsReader {
 
   static withKeyboard(input: Input): ControlsReader {
     return new ControlsReader([new KeyboardControlSource(input)]);
+  }
+
+  /** キーボードと画面のボタン (タッチの端末でボタンを出している間だけ効く) */
+  static withKeyboardAndTouch(input: Input, pad: TouchButtonState): ControlsReader {
+    return new ControlsReader([new KeyboardControlSource(input), new TouchControlSource(pad)]);
   }
 
   addSource(source: ControlSource): void {

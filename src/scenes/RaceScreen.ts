@@ -1,6 +1,8 @@
 import { Camera } from '../core/Camera';
+import type { ControlSourceKind } from '../core/ControlsReader';
 import type { Game } from '../core/Game';
 import type { LoopSound } from '../core/LoopSound';
+import type { TouchPadOptions } from '../core/TouchPad';
 import { WorldLayer } from '../core/WorldLayer';
 import { DriveSounds } from '../entities/DriveSounds';
 import { OtherCarEngines } from '../entities/OtherCarEngines';
@@ -103,7 +105,7 @@ interface CarSprites {
  * screen.build(track);                       // LOADING を出したあとの更新で (重い)
  * screen.start(session);                     // グリッドに並んだとき (リスタートでも)
  * for (const e of session.step(controls, dt)) screen.handleEvent(e);
- * screen.update(dt, controls, isGamepad);
+ * screen.update(dt, controls, reader.lastUsedKind);
  * screen.render(ctx);
  * screen.stopSounds();                       // 画面を抜けるとき
  * ```
@@ -205,8 +207,8 @@ export class RaceScreen {
     applyCameraMode(this.camera, settings.cameraMode, this.source?.player?.car ?? null);
   }
 
-  /** step のあとに 1 フレーム進める。isGamepad は PRESS Y TO RESET の出し分け */
-  update(dt: number, controls: Readonly<Controls>, isGamepad: boolean): void {
+  /** step のあとに 1 フレーム進める。inputKind は PRESS R / PRESS Y / TAP R TO RESET の出し分け */
+  update(dt: number, controls: Readonly<Controls>, inputKind: ControlSourceKind): void {
     const source = this.source;
     const player = source?.player;
     if (!source || !player) return;
@@ -215,7 +217,7 @@ export class RaceScreen {
     this.positions.update(dt, source.orderNumbers);
     if (source.phase === 'racing' && this.positions.hasChangedNow(player.carNumber)) this.game.audio.playSe('position-change');
     followCar(this.camera, player.car, dt);
-    this.updateStatusMessages(source, player, isGamepad);
+    this.updateStatusMessages(source, player, inputKind);
     this.messages.update(dt);
     this.updateEffects(source, player, dt);
     this.updateSounds(source, player, controls);
@@ -343,7 +345,19 @@ export class RaceScreen {
   }
 
   /** 状態が続く間だけ出すメッセージ (10.2 節の優先度 1 と RESET のカウント)。ゴール・リタイア後は出さない */
-  private updateStatusMessages(source: RaceScreenSource, player: RaceCar, isGamepad: boolean): void {
+  /** 画面のボタン (タッチの端末) の強調: コース復帰が使えるときの R、DRS が使えるときの DRS */
+  touchPadOptions(): TouchPadOptions {
+    const source = this.source;
+    const player = source?.player;
+    if (!source || !player) return {};
+    const isRacing = player.status === 'racing' && source.phase !== 'aborted';
+    return {
+      highlightReset: isRacing && !player.isLaunchBlocked && source.isResetAvailable(player),
+      highlightDrs: isRacing && player.drs.indicator(player.car) !== 'unavailable',
+    };
+  }
+
+  private updateStatusMessages(source: RaceScreenSource, player: RaceCar, inputKind: ControlSourceKind): void {
     const m = this.messages;
     const isRacing = player.status === 'racing' && source.phase !== 'aborted';
     const lap = player.lap;
@@ -351,7 +365,7 @@ export class RaceScreen {
     m.setStatus('missedCheckpoint', isRacing && lap.isCheckpointMissed ? hudMessages.missedCheckpoint() : null);
     // 踏んだまま消灯して発進できない間は、復帰より「離して踏み直す」を知らせる
     const canReset = isRacing && !player.isLaunchBlocked && source.isResetAvailable(player);
-    m.setStatus('canReset', canReset ? hudMessages.pressToReset(isGamepad) : null);
+    m.setStatus('canReset', canReset ? hudMessages.pressToReset(inputKind) : null);
     // 置き直したあとの操作不能の間だけカウントを出す (暗転中は出さない)
     const isCounting = isRacing && player.resetLockRemaining > 0 && player.screenFade < 1 && player.car.controlLocked;
     m.setStatus('reset', isCounting ? hudMessages.resetCount(player.resetLockRemaining) : null);

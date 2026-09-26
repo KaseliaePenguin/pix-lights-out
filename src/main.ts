@@ -14,6 +14,7 @@ import { inviteCodeFromHash } from './shared/net/connectionCode';
 import { isRoomLinkHash, roomLinkFromHash } from './shared/net/roomLink';
 import { colors } from './ui/colors';
 import { drawText, setUiFontImage } from './ui/text';
+import { drawRotateNotice, drawTouchPad } from './ui/touchPadView';
 
 /**
  * 最初の画面。開発時だけ ?scene=timeattack / ?scene=race で走行画面から始める (headless のスクリーンショット確認用)。
@@ -84,6 +85,10 @@ window.addEventListener('hashchange', () => {
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const game = new Game(canvas);
+game.touchPad.painter = drawTouchPad;
+game.rotateNoticePainter = drawRotateNotice;
+// 開発時だけ: ヘッドレスの確認 (画面のボタンの位置・押し下げを読む) 用
+if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
 game.audio.defineSounds(soundDefs);
 applyVolumeSettings(game.audio, loadSettings());
 

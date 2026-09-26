@@ -2,12 +2,40 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- スマートフォン: 拡大しない、ノッチの裏まで使う (ボタンは safe-area を避けて置く)、画面のキーボードでページを縮めない -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual"
+    />
+    <meta name="theme-color" content="#11111b" />
+    <!-- ホーム画面に追加したときに全画面で開く (iPhone は Fullscreen API が使えないため) -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PIX LIGHTS OUT" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>PIX LIGHTS OUT</title>
     <style>
-      html, body { margin: 0; height: 100%; background: #111; }
-      body { display: flex; align-items: center; justify-content: center; }
-      canvas { background: #1e1e2e; image-rendering: pixelated; max-width: 100%; max-height: 100%; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        overflow: hidden;
+        overscroll-behavior: none;
+        /* ダブルタップの拡大・スクロール・長押しの選択を止める (入力欄は下で戻す) */
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      /* iOS のゴムのようなスクロールで画面がずれないように固定する */
+      body { position: fixed; inset: 0; }
+      /* 表示サイズと位置は ScreenFit (src/core/ScreenFit.ts) が決める */
+      canvas#game { position: absolute; background: #1e1e2e; image-rendering: pixelated; }
+      input, textarea { -webkit-user-select: text; user-select: text; touch-action: manipulation; }
     </style>
   </head>
   <body>

@@ -53,6 +53,7 @@ export class LobbyUi {
       maxLength: 8,
       filter: filterPlayerName,
       onCommit: (text) => options.onNameCommit(text),
+      isFloatingWhileEditing: () => game.pointer.isTouchMode,
     });
     document.addEventListener('paste', this.onDocumentPaste);
   }

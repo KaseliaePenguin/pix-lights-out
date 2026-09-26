@@ -5,12 +5,16 @@ import { formatLapTime } from '../ui/format';
 import { drawFooterHint, drawMenuList, drawScreenTitle } from '../ui/menuList';
 import type { MenuItemView } from '../ui/menuList';
 import { drawText } from '../ui/text';
+import { drawBackButton } from '../ui/touchUi';
 import { GuestLobbyScene } from './GuestLobbyScene';
 import { clearInviteHandler, setInviteHandler } from './inviteRouter';
 import type { Invite } from './inviteRouter';
 import { HelpScene } from './HelpScene';
 import {
+  menuHint,
   moveMenuCursor,
+  tappedMenuRow,
+  wasBackTapped,
   wasMenuBackPressed,
   wasMenuConfirmPressed,
   wasMenuDownPressed,
@@ -39,6 +43,8 @@ const entries: readonly MenuEntry[] = [
   { item: 'settings', label: 'SETTINGS', isEnabled: true },
   { item: 'controls', label: 'CONTROLS', isEnabled: true },
 ];
+
+const listLayout = { x: 220, y: 144, width: 360 };
 
 /** メインメニュー (game-design.md 6 章) */
 export class MenuScene implements Scene {
@@ -70,8 +76,12 @@ export class MenuScene implements Scene {
 
   update(): void {
     const { input } = this.game;
+    const tapped = tappedMenuRow(this.game, listLayout, entries.length);
     // 選べない項目にもカーソルを止める (何があるかを見せるため)。isSelectable は渡さない
-    if (wasMenuUpPressed(input)) {
+    if (tapped >= 0) {
+      this.selected = tapped;
+      this.confirm();
+    } else if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, entries.length);
       this.game.audio.playSe('ui-cursor');
     } else if (wasMenuDownPressed(input)) {
@@ -79,7 +89,7 @@ export class MenuScene implements Scene {
       this.game.audio.playSe('ui-cursor');
     } else if (wasMenuConfirmPressed(input)) {
       this.confirm();
-    } else if (wasMenuBackPressed(input)) {
+    } else if (wasMenuBackPressed(input) || wasBackTapped(this.game)) {
       this.game.audio.playSe('ui-cancel');
       this.game.changeScene(new TitleScene(this.game));
     }
@@ -96,7 +106,7 @@ export class MenuScene implements Scene {
       isEnabled: e.isEnabled,
       note: e.isEnabled ? undefined : 'SOON',
     }));
-    drawMenuList(ctx, views, this.selected, { x: 220, y: 144, width: 360 });
+    drawMenuList(ctx, views, this.selected, listLayout);
 
     // 6.1 節: 自己ベスト (タイムアタック)
     const bestY = 144 + entries.length * 32 + 32;
@@ -106,7 +116,8 @@ export class MenuScene implements Scene {
       align: 'right',
     });
 
-    drawFooterHint(ctx, 'UP/DOWN: SELECT  ENTER: OK  ESC: BACK', width / 2, height - 36);
+    if (this.game.pointer.isTouchMode) drawBackButton(ctx);
+    drawFooterHint(ctx, menuHint(this.game, 'UP/DOWN: SELECT  ENTER: OK  ESC: BACK'), width / 2, height - 36);
   }
 
   private confirm(): void {

@@ -35,7 +35,7 @@ export class RaceScene implements Scene {
     private readonly setup: Readonly<RaceSetup>,
     private readonly seed: number,
   ) {
-    this.reader = ControlsReader.withKeyboard(game.input);
+    this.reader = ControlsReader.withKeyboardAndTouch(game.input, game.touchPad);
     this.screen = new RaceScreen(game, singleRaceLabels);
   }
 
@@ -68,18 +68,19 @@ export class RaceScene implements Scene {
         this.goToResults();
         return;
       }
-    } else if (input.wasPressed('Escape') || input.wasBlurred()) {
+    } else if (input.wasPressed('Escape') || input.wasBlurred() || this.game.touchPad.wasPressed('pause') || this.game.screen.isRotateNeeded) {
       // ゴール後 (リザルトへ進むまでの 3 秒) はポーズしない
       this.openPause();
       return;
     }
 
+    this.game.touchPad.show(this.screen.touchPadOptions());
     this.reader.read(this.controls);
     for (const e of session.step(this.controls, dt)) {
       if (this.screen.handleEvent(e)) this.finishTimer = finishToResultTime;
       if (e.type === 'raceFinished' && this.finishTimer < 0) this.finishTimer = finishToResultTime;
     }
-    this.screen.update(dt, this.controls, this.reader.lastUsedKind === 'gamepad');
+    this.screen.update(dt, this.controls, this.reader.lastUsedKind);
   }
 
   render(ctx: CanvasRenderingContext2D): void {

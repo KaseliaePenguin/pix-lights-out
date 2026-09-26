@@ -1,6 +1,13 @@
+import type { ControlSourceKind } from '../core/ControlsReader';
 import { colors } from './colors';
 import { formatLapTime } from './format';
 import type { HudMessage } from './MessageQueue';
+
+const resetTexts: Record<ControlSourceKind, string> = {
+  keyboard: 'PRESS R TO RESET',
+  gamepad: 'PRESS Y TO RESET',
+  touch: 'TAP R TO RESET',
+};
 
 /**
  * メッセージ帯の文言・色・優先度 (game-design.md 10.2 節の表)。
@@ -10,8 +17,8 @@ export const hudMessages = {
   // 優先度 1 (状態が続く間、点滅)
   wrongWay: (): HudMessage => ({ text: 'WRONG WAY', color: colors.yellow, priority: 1 }),
   missedCheckpoint: (): HudMessage => ({ text: 'MISSED CHECKPOINT', color: colors.yellow, priority: 1 }),
-  pressToReset: (isGamepad = false): HudMessage => ({
-    text: isGamepad ? 'PRESS Y TO RESET' : 'PRESS R TO RESET',
+  pressToReset: (kind: ControlSourceKind = 'keyboard'): HudMessage => ({
+    text: resetTexts[kind],
     color: colors.yellow,
     priority: 1,
   }),

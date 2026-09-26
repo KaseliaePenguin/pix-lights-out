@@ -1,4 +1,7 @@
+import type { Game } from '../core/Game';
 import type { Input } from '../core/Input';
+import type { MenuListLayout } from '../ui/menuList';
+import { backButtonRect, fullscreenButtonRect, menuRowRect, menuValueRect } from '../ui/touchUi';
 
 // メニュー操作のキー (game-design.md 5.1 節: 上下で選択、Enter / Space で決定、Escape で戻る)
 // TODO(gamepad): M3 でゲームパッド (十字キー・A・B) を足す
@@ -53,4 +56,45 @@ export function moveMenuCursor(
     if (isSelectable(index)) return index;
   }
   return current;
+}
+
+// ---- タッチ (game-design.md 5.4 節)。タップはマウスのクリックでも同じように効く ----
+
+/** タップした行 (なければ -1) */
+export function tappedMenuRow(game: Game, layout: MenuListLayout, count: number): number {
+  const tap = game.pointer.tap;
+  if (!tap) return -1;
+  for (let i = 0; i < count; i++) if (game.pointer.wasTappedIn(menuRowRect(layout, i))) return i;
+  return -1;
+}
+
+/** index 行目の値の側をタップしたら、左半分で -1・右半分で 1。それ以外は 0 */
+export function tappedMenuValueStep(game: Game, layout: MenuListLayout, index: number): number {
+  const tap = game.pointer.tap;
+  const r = menuValueRect(layout, index);
+  if (!tap || !game.pointer.wasTappedIn(r)) return 0;
+  return tap.x < r.x + r.w / 2 ? -1 : 1;
+}
+
+/** 画面左上の BACK をタップしたか (タッチの端末でボタンを出しているときだけ) */
+export function wasBackTapped(game: Game): boolean {
+  return game.pointer.isTouchMode && game.pointer.wasTappedIn(backButtonRect);
+}
+
+/** 全画面のボタンを出すか (タッチの端末で、全画面にできるとき) */
+export function isFullscreenButtonShown(game: Game): boolean {
+  return game.pointer.isTouchMode && game.screen.canFullscreen;
+}
+
+/** 全画面のボタンをタップしたら切り替えて true */
+export function handleFullscreenTap(game: Game): boolean {
+  if (!isFullscreenButtonShown(game) || !game.pointer.wasTappedIn(fullscreenButtonRect)) return false;
+  game.audio.playSe('ui-confirm');
+  game.screen.toggleFullscreen();
+  return true;
+}
+
+/** 画面下の操作案内。タッチの端末ではタップの案内にする */
+export function menuHint(game: Game, keyboardText: string, touchText = 'TAP AN ITEM TO SELECT'): string {
+  return game.pointer.isTouchMode ? touchText : keyboardText;
 }

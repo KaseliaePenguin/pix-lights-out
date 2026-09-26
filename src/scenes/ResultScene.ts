@@ -10,7 +10,9 @@ import { drawText } from '../ui/text';
 import { MenuScene } from './MenuScene';
 import {
   afterRaceInputDelay,
+  menuHint,
   moveMenuCursor,
+  tappedMenuRow,
   wasAfterRaceConfirmPressed,
   wasMenuBackPressed,
   wasMenuDownPressed,
@@ -31,6 +33,7 @@ const labels: Record<ResultItem, string> = {
 };
 
 const tableTop = 112;
+const listLayout = { x: 260, y: tableTop + 24 + 8 * resultRowHeight + 20, width: 280 };
 
 /**
  * リザルト (game-design.md 6.1 節): 順位、車番・略称、総タイム (ペナルティ込み)、優勝者との差、ベストラップ (全体ベストは紫)、
@@ -61,7 +64,11 @@ export class ResultScene implements Scene {
       return;
     }
     const { input, audio } = this.game;
-    if (wasMenuUpPressed(input)) {
+    const tapped = tappedMenuRow(this.game, listLayout, items.length);
+    if (tapped >= 0) {
+      this.selected = tapped;
+      this.confirm(items[tapped]);
+    } else if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, items.length);
       audio.playSe('ui-cursor');
     } else if (wasMenuDownPressed(input)) {
@@ -83,9 +90,8 @@ export class ResultScene implements Scene {
     this.renderTable(ctx);
 
     const views: MenuItemView[] = items.map((item) => ({ label: labels[item], isEnabled: true }));
-    const listY = tableTop + 24 + 8 * resultRowHeight + 20;
-    drawMenuList(ctx, views, this.selected, { x: 260, y: listY, width: 280 });
-    drawFooterHint(ctx, 'UP/DOWN: SELECT  ENTER: OK  ESC: MENU', width / 2, height - 36);
+    drawMenuList(ctx, views, this.selected, listLayout);
+    drawFooterHint(ctx, menuHint(this.game, 'UP/DOWN: SELECT  ENTER: OK  ESC: MENU'), width / 2, height - 36);
   }
 
   private renderSummary(ctx: CanvasRenderingContext2D): void {

@@ -125,7 +125,7 @@ export class TimeAttackScene implements Scene {
   private time = 0;
 
   constructor(private readonly game: Game) {
-    this.reader = ControlsReader.withKeyboard(game.input);
+    this.reader = ControlsReader.withKeyboardAndTouch(game.input, game.touchPad);
     if (import.meta.env.DEV) {
       this.tuning = new TuningPanel(getTuningStore(), game.input, () => {
         this.isRunTuned = true;
@@ -171,7 +171,7 @@ export class TimeAttackScene implements Scene {
       this.pause.update(dt);
       return;
     }
-    if (input.wasPressed('Escape') || input.wasBlurred()) {
+    if (input.wasPressed('Escape') || input.wasBlurred() || this.game.touchPad.wasPressed('pause') || this.game.screen.isRotateNeeded) {
       this.openPause();
       return;
     }
@@ -180,6 +180,7 @@ export class TimeAttackScene implements Scene {
 
     const session = this.session;
     this.time += dt;
+    this.game.touchPad.show({ highlightReset: session.isResetAvailable, highlightDrs: session.drs.indicator(session.car) !== 'unavailable' });
     this.reader.read(this.controls);
     for (const e of session.step(this.controls, dt)) this.handleEvent(e);
 
@@ -340,7 +341,7 @@ export class TimeAttackScene implements Scene {
     const m = this.messages;
     m.setStatus('wrongWay', lap.isWrongWay ? hudMessages.wrongWay() : null);
     m.setStatus('missedCheckpoint', lap.isCheckpointMissed ? hudMessages.missedCheckpoint() : null);
-    m.setStatus('canReset', session.isResetAvailable ? hudMessages.pressToReset(this.reader.lastUsedKind === 'gamepad') : null);
+    m.setStatus('canReset', session.isResetAvailable ? hudMessages.pressToReset(this.reader.lastUsedKind) : null);
     // 置き直したあとの操作不能の間だけカウントを出す (暗転中は出さない)
     const isCounting = session.resetLockRemaining > 0 && session.screenFade < 1 && session.car.controlLocked && session.phase === 'running';
     m.setStatus('reset', isCounting ? hudMessages.resetCount(session.resetLockRemaining) : null);

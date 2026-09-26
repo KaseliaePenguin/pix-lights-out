@@ -5,11 +5,12 @@ import { colors } from '../ui/colors';
 import { drawStartLamps, startLampsWidth } from '../ui/startLamps';
 import type { LampImages } from '../ui/startLamps';
 import { drawText, measureText } from '../ui/text';
+import { drawFullscreenButton } from '../ui/touchUi';
 import { GuestLobbyScene } from './GuestLobbyScene';
 import { clearInviteHandler, setInviteHandler } from './inviteRouter';
 import type { Invite } from './inviteRouter';
 import { MenuScene } from './MenuScene';
-import { wasMenuConfirmPressed } from './menuKeys';
+import { handleFullscreenTap, isFullscreenButtonShown, wasMenuConfirmPressed } from './menuKeys';
 
 // スタートランプの演出: 1 秒ごとに 1 灯 → 5 灯で少し保持 → 全消灯 (1 回目の消灯で車が発進) → 暗いまま待って繰り返す
 const firstLampDelay = 1;
@@ -67,7 +68,9 @@ export class TitleScene implements Scene {
     this.time += dt;
     this.updateLamps(dt);
     this.traffic?.update(dt);
-    if (wasMenuConfirmPressed(this.game.input)) {
+    if (handleFullscreenTap(this.game)) return;
+    // タッチの端末 (とマウス) は画面のどこをタップしても始める
+    if (wasMenuConfirmPressed(this.game.input) || this.game.pointer.tap) {
       this.game.audio.playSe('ui-confirm');
       this.game.changeScene(new MenuScene(this.game));
     }
@@ -98,8 +101,10 @@ export class TitleScene implements Scene {
       drawText(ctx, 'PIX LIGHTS OUT', width / 2, logoY + 20, { scale: 6, color: colors.white, align: 'center' });
     }
 
+    if (isFullscreenButtonShown(this.game)) drawFullscreenButton(ctx, this.game.screen.isFullscreen);
+
     if (Math.floor(this.time * 2) % 2 === 0) {
-      const label = 'PRESS ENTER';
+      const label = this.game.pointer.isTouchMode ? 'TAP TO START' : 'PRESS ENTER';
       const textW = measureText(label);
       const textLeft = Math.round((width - textW) / 4) * 2;
       ctx.fillStyle = colors.ink;

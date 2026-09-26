@@ -77,7 +77,7 @@ export class NetRaceScene implements Scene {
     private readonly link: OnlineLink,
     private readonly race: NetRaceClient,
   ) {
-    this.reader = ControlsReader.withKeyboard(game.input);
+    this.reader = ControlsReader.withKeyboardAndTouch(game.input, game.touchPad);
     const abbrs = standingsAbbrs(race.cars.map((rc) => ({ carNumber: rc.carNumber, name: race.nameOf(rc.carNumber) })), race.player.carNumber);
     const labels: RaceScreenLabels = {
       nameTagOf: (rc) => race.nameOf(rc.carNumber),
@@ -117,12 +117,18 @@ export class NetRaceScene implements Scene {
     if (this.pause) {
       this.pause.update(dt);
       if (this.hasLeft) return;
-    } else if (this.finishTimer < 0 && wasMenuBackPressed(input)) this.openPause();
+    } else if (this.finishTimer < 0 && (wasMenuBackPressed(input) || this.game.touchPad.wasPressed('pause') || this.game.screen.isRotateNeeded)) {
+      // 縦向きにしたときもメニューを開く (他の人のレースは止まらない)
+      this.openPause();
+    }
 
     // メニューを開いていても、他の人のレースは止めない (自分の車は操作できない)
     if (this.pause) clearControls(this.controls);
     else if (this.autopilot) this.autopilot.drive(this.race, dt, this.controls);
-    else this.reader.read(this.controls);
+    else {
+      this.game.touchPad.show(this.screen.touchPadOptions());
+      this.reader.read(this.controls);
+    }
     for (const e of this.race.step(this.controls, dt)) this.handleEvent(e);
     if (this.isConnectionLost) return;
     // 自分がゴールしたあと、ほかの人のゴール (ホストの結果) を待つ間
@@ -134,7 +140,7 @@ export class NetRaceScene implements Scene {
       if (this.hostNoticeRemaining <= 0) this.screen.messages.setStatus('hostNotice', null);
     }
     this.hiddenNoticeRemaining = Math.max(0, this.hiddenNoticeRemaining - dt);
-    this.screen.update(dt, this.controls, this.reader.lastUsedKind === 'gamepad');
+    this.screen.update(dt, this.controls, this.reader.lastUsedKind);
 
     if (this.finishTimer >= 0) {
       this.finishTimer -= dt;

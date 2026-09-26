@@ -5,18 +5,19 @@ import { drawFooterHint, drawScreenTitle } from '../ui/menuList';
 import { drawPanel } from '../ui/panel';
 import { drawParagraph } from '../ui/paragraph';
 import { drawText } from '../ui/text';
+import { drawBackButton } from '../ui/touchUi';
 import { wasMenuBackPressed, wasMenuConfirmPressed } from './menuKeys';
 
-// game-design.md 5.1 節。HUD フォントに小文字・日本語がないため英大文字で書く
+// game-design.md 5.1 節 (キーボード)・5.4 節 (タッチ)。HUD フォントに小文字・日本語がないため英大文字で書く
 // TODO(gamepad): M3 でゲームパッドの割り当ての列を足す (5.2 節)
-const controlRows: ReadonlyArray<readonly [string, string]> = [
-  ['ACCELERATE', 'Z'],
-  ['BRAKE / REVERSE', 'X'],
-  ['STEER LEFT', 'LEFT'],
-  ['STEER RIGHT', 'RIGHT'],
-  ['DRS', 'SPACE'],
-  ['RESET TO TRACK', 'R'],
-  ['PAUSE', 'ESC'],
+const controlRows: ReadonlyArray<readonly [action: string, keyboard: string, touch: string]> = [
+  ['ACCELERATE', 'Z', 'ACCEL'],
+  ['BRAKE / REVERSE', 'X', 'BRAKE'],
+  ['STEER LEFT', 'LEFT', '<'],
+  ['STEER RIGHT', 'RIGHT', '>'],
+  ['DRS', 'SPACE', 'DRS'],
+  ['RESET TO TRACK', 'R', 'R'],
+  ['PAUSE', 'ESC', 'II'],
 ];
 
 /**
@@ -31,7 +32,8 @@ export class HelpScene implements Scene {
 
   update(): void {
     const { input } = this.game;
-    if (wasMenuBackPressed(input) || wasMenuConfirmPressed(input)) {
+    // 画面のどこをタップしても戻る (BACK のボタンも同じ)
+    if (wasMenuBackPressed(input) || wasMenuConfirmPressed(input) || this.game.pointer.tap) {
       this.game.audio.playSe('ui-cancel');
       this.onBack();
     }
@@ -43,26 +45,31 @@ export class HelpScene implements Scene {
     ctx.fillRect(0, 0, width, height);
     drawScreenTitle(ctx, 'CONTROLS', width / 2, 48);
 
-    const panelX = 150;
-    const panelY = 112;
-    const panelW = 500;
-    drawPanel(ctx, panelX, panelY, panelW, 24 + controlRows.length * 28);
-    controlRows.forEach(([action, keys], i) => {
-      const y = panelY + 16 + i * 28;
+    const panelX = 110;
+    const panelY = 96;
+    const panelW = 580;
+    const rowH = 26;
+    const keyX = panelX + 400;
+    const touchX = panelX + panelW - 16;
+    drawPanel(ctx, panelX, panelY, panelW, 16 + (controlRows.length + 1) * rowH);
+    drawText(ctx, 'KEYBOARD', keyX, panelY + 12, { color: colors.midGrey, align: 'right' });
+    drawText(ctx, 'TOUCH', touchX, panelY + 12, { color: colors.midGrey, align: 'right' });
+    controlRows.forEach(([action, keys, touch], i) => {
+      const y = panelY + 12 + (i + 1) * rowH;
       drawText(ctx, action, panelX + 16, y, { color: colors.subtext });
-      drawText(ctx, keys, panelX + panelW - 16, y, { color: colors.white, align: 'right' });
+      drawText(ctx, keys, keyX, y, { color: colors.white, align: 'right' });
+      drawText(ctx, touch, touchX, y, { color: colors.white, align: 'right' });
     });
 
-    const noteY = panelY + 24 + controlRows.length * 28 + 24;
-    drawText(ctx, 'STEERING IS RELATIVE TO THE CAR.', width / 2, noteY, { color: colors.text, align: 'center' });
-    drawText(ctx, 'DRS: OPEN IN THE DRS ZONE. BRAKE TO CLOSE.', width / 2, noteY + 24, {
-      color: colors.text,
-      align: 'center',
-    });
-    drawText(ctx, 'MENU: UP/DOWN SELECT  ENTER OK  ESC BACK', width / 2, noteY + 48, {
-      color: colors.text,
-      align: 'center',
-    });
+    const noteY = panelY + 16 + (controlRows.length + 1) * rowH + 16;
+    const lines = [
+      'STEERING IS RELATIVE TO THE CAR.',
+      'DRS: OPEN IN THE DRS ZONE. BRAKE TO CLOSE.',
+      'MENU: UP/DOWN SELECT  ENTER OK  ESC BACK',
+      'TOUCH: HOLD LEFT HAND < >, RIGHT HAND BRAKE / ACCEL.',
+      'SLIDE A THUMB TO SWITCH. TAP MENU ITEMS TO CHOOSE.',
+    ];
+    lines.forEach((line, i) => drawText(ctx, line, width / 2, noteY + i * 22, { color: colors.text, align: 'center' }));
 
     // マルチの注意 (network.md「ホストのタブが…」の 7、「コードに IP アドレスが含まれる」)
     drawParagraph(
@@ -71,9 +78,10 @@ export class HelpScene implements Scene {
         "MULTIPLAYER: IF THE HOST'S COMPUTER GOES TO SLEEP, EVERYONE IS DISCONNECTED.",
         'CONNECTING SENDS YOUR GLOBAL IP ADDRESS TO THE STUN SERVERS (GOOGLE, CLOUDFLARE).',
       ],
-      60, noteY + 88, width - 120, { color: colors.subtext, align: 'center' },
+      60, noteY + lines.length * 22 + 14, width - 120, { color: colors.subtext, align: 'center' },
     );
 
-    drawFooterHint(ctx, 'ENTER / ESC: BACK', width / 2, height - 36);
+    if (this.game.pointer.isTouchMode) drawBackButton(ctx);
+    drawFooterHint(ctx, this.game.pointer.isTouchMode ? 'TAP ANYWHERE: BACK' : 'ENTER / ESC: BACK', width / 2, height - 30);
   }
 }

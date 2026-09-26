@@ -2,11 +2,15 @@ import type { Game } from '../core/Game';
 import type { Scene } from '../core/Scene';
 import { colors } from '../ui/colors';
 import { drawMenuList } from '../ui/menuList';
-import type { MenuItemView } from '../ui/menuList';
+import type { MenuItemView, MenuListLayout } from '../ui/menuList';
 import { drawPanel } from '../ui/panel';
 import { drawText } from '../ui/text';
+import { drawFullscreenButton } from '../ui/touchUi';
 import {
+  handleFullscreenTap,
+  isFullscreenButtonShown,
   moveMenuCursor,
+  tappedMenuRow,
   wasMenuBackPressed,
   wasMenuConfirmPressed,
   wasMenuDownPressed,
@@ -73,7 +77,12 @@ export class PauseScene implements Scene {
       return;
     }
     const { input } = this.game;
-    if (wasMenuUpPressed(input)) {
+    if (handleFullscreenTap(this.game)) return;
+    const tapped = tappedMenuRow(this.game, this.listLayout(), this.items.length);
+    if (tapped >= 0) {
+      this.selected = tapped;
+      this.confirm();
+    } else if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, this.items.length);
       this.game.audio.playSe('ui-cursor');
     } else if (wasMenuDownPressed(input)) {
@@ -92,14 +101,24 @@ export class PauseScene implements Scene {
       this.child.render(ctx);
       return;
     }
-    const { width, height } = this.game;
-    const panelH = 64 + this.items.length * rowH + 8;
-    const x = (width - panelW) / 2;
-    const y = Math.round((height - panelH) / 4) * 2;
-    drawPanel(ctx, x, y, panelW, panelH);
+    const { width } = this.game;
+    const { x, y, h } = this.panelRect();
+    drawPanel(ctx, x, y, panelW, h);
     drawText(ctx, 'PAUSE', width / 2, y + 16, { scale: 4, color: colors.white, align: 'center' });
     const views: MenuItemView[] = this.items.map((item) => ({ label: labels[item], isEnabled: true }));
-    drawMenuList(ctx, views, this.selected, { x: x + 8, y: y + 60, width: panelW - 16, rowHeight: rowH });
+    drawMenuList(ctx, views, this.selected, this.listLayout());
+    if (isFullscreenButtonShown(this.game)) drawFullscreenButton(ctx, this.game.screen.isFullscreen);
+  }
+
+  private panelRect(): { x: number; y: number; h: number } {
+    const { width, height } = this.game;
+    const h = 64 + this.items.length * rowH + 8;
+    return { x: (width - panelW) / 2, y: Math.round((height - h) / 4) * 2, h };
+  }
+
+  private listLayout(): MenuListLayout {
+    const { x, y } = this.panelRect();
+    return { x: x + 8, y: y + 60, width: panelW - 16, rowHeight: rowH };
   }
 
   private confirm(): void {

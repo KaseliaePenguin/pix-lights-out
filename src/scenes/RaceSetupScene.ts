@@ -1,13 +1,18 @@
 import type { Game } from '../core/Game';
 import type { Scene } from '../core/Scene';
 import { colors } from '../ui/colors';
-import { drawFooterHint, drawMenuList, drawScreenTitle } from '../ui/menuList';
+import { drawFooterHint, drawScreenTitle } from '../ui/menuList';
 import type { MenuItemView } from '../ui/menuList';
 import { teamOf } from '../ui/teams';
 import { drawText } from '../ui/text';
+import { drawBackButton, drawTouchMenuList } from '../ui/touchUi';
 import { MenuScene } from './MenuScene';
 import {
+  menuHint,
   moveMenuCursor,
+  tappedMenuRow,
+  tappedMenuValueStep,
+  wasBackTapped,
   wasMenuBackPressed,
   wasMenuConfirmPressed,
   wasMenuDownPressed,
@@ -36,6 +41,7 @@ const listX = 180;
 const listY = 136;
 const listW = 440;
 const rowH = 32;
+const listLayout = { x: listX, y: listY, width: listW, rowHeight: rowH };
 
 /** レース設定 (game-design.md 6 章。メニューの SINGLE RACE から) */
 export class RaceSetupScene implements Scene {
@@ -55,7 +61,14 @@ export class RaceSetupScene implements Scene {
 
   update(): void {
     const { input, audio } = this.game;
-    if (wasMenuUpPressed(input)) {
+    const tapped = tappedMenuRow(this.game, listLayout, items.length);
+    if (tapped >= 0) {
+      this.selected = tapped;
+      // 値の側 (< >) のタップは左右キーと同じ、それ以外は決定と同じ
+      const step = tappedMenuValueStep(this.game, listLayout, tapped);
+      if (step !== 0 && items[tapped] !== 'start' && items[tapped] !== 'back') this.change(step);
+      else this.confirm();
+    } else if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, items.length);
       audio.playSe('ui-cursor');
     } else if (wasMenuDownPressed(input)) {
@@ -67,7 +80,7 @@ export class RaceSetupScene implements Scene {
       this.change(1);
     } else if (wasMenuConfirmPressed(input)) {
       this.confirm();
-    } else if (wasMenuBackPressed(input)) {
+    } else if (wasMenuBackPressed(input) || wasBackTapped(this.game)) {
       audio.playSe('ui-cancel');
       this.back();
     }
@@ -94,7 +107,7 @@ export class RaceSetupScene implements Scene {
           return { label: labels[item], isEnabled: true };
       }
     });
-    drawMenuList(ctx, views, this.selected, { x: listX, y: listY, width: listW, rowHeight: rowH });
+    drawTouchMenuList(ctx, views, this.selected, listLayout, this.game.pointer.isTouchMode);
 
     // 選んだチームの名前と色 (車番の色は順位表・名前タグと同じ)
     const team = teamOf(s.carNumber);
@@ -104,7 +117,8 @@ export class RaceSetupScene implements Scene {
     drawText(ctx, team.name, listX + 40, infoY, { color: colors.text });
     drawText(ctx, 'NO QUALIFYING: YOU START FROM THE BACK', width / 2, infoY + 40, { color: colors.subtext, align: 'center' });
 
-    drawFooterHint(ctx, 'UP/DOWN: SELECT  LEFT/RIGHT: CHANGE  ENTER: OK  ESC: BACK', width / 2, height - 36);
+    if (this.game.pointer.isTouchMode) drawBackButton(ctx);
+    drawFooterHint(ctx, menuHint(this.game, 'UP/DOWN: SELECT  LEFT/RIGHT: CHANGE  ENTER: OK  ESC: BACK', 'TAP < > TO CHANGE'), width / 2, height - 36);
   }
 
   private change(step: number): void {

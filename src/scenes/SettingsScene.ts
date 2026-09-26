@@ -1,11 +1,16 @@
 import type { Game } from '../core/Game';
 import type { Scene } from '../core/Scene';
 import { colors } from '../ui/colors';
-import { drawFooterHint, drawMenuList, drawScreenTitle } from '../ui/menuList';
+import { drawFooterHint, drawScreenTitle } from '../ui/menuList';
 import type { MenuItemView } from '../ui/menuList';
+import { drawBackButton, drawTouchMenuList } from '../ui/touchUi';
 import { HelpScene } from './HelpScene';
 import {
+  menuHint,
   moveMenuCursor,
+  tappedMenuRow,
+  tappedMenuValueStep,
+  wasBackTapped,
   wasMenuBackPressed,
   wasMenuConfirmPressed,
   wasMenuDownPressed,
@@ -23,6 +28,7 @@ const cameraModes: readonly CameraMode[] = ['rotate', 'fixed'];
 const cameraModeLabels: Record<CameraMode, string> = { rotate: 'ROTATE', fixed: 'FIXED' };
 const nameTagModes: readonly NameTagMode[] = ['all', 'self', 'off'];
 const nameTagLabels: Record<NameTagMode, string> = { all: 'ALL', self: 'SELF', off: 'OFF' };
+const listLayout = { x: 180, y: 128, width: 440 };
 
 /**
  * 設定画面 (game-design.md 4 章の M1 項目)。値は変えた時点で保存する。
@@ -45,7 +51,15 @@ export class SettingsScene implements Scene {
       return;
     }
     const { input } = this.game;
-    if (wasMenuUpPressed(input)) {
+    const tapped = tappedMenuRow(this.game, listLayout, items.length);
+    if (tapped >= 0) {
+      this.selected = tapped;
+      const step = tappedMenuValueStep(this.game, listLayout, tapped);
+      // 値の側 (< >) のタップは左右キーと同じ、それ以外は決定と同じ (音量の行は選ぶだけ)
+      if (step !== 0 && this.hasValue(items[tapped])) this.changeValue(step);
+      else if (items[tapped] === 'bgmVolume' || items[tapped] === 'seVolume') this.game.audio.playSe('ui-cursor');
+      else this.confirm();
+    } else if (wasMenuUpPressed(input)) {
       this.selected = moveMenuCursor(this.selected, -1, items.length);
       this.game.audio.playSe('ui-cursor');
     } else if (wasMenuDownPressed(input)) {
@@ -57,10 +71,14 @@ export class SettingsScene implements Scene {
       this.changeValue(1);
     } else if (wasMenuConfirmPressed(input)) {
       this.confirm();
-    } else if (wasMenuBackPressed(input)) {
+    } else if (wasMenuBackPressed(input) || wasBackTapped(this.game)) {
       this.game.audio.playSe('ui-cancel');
       this.onBack();
     }
+  }
+
+  private hasValue(item: SettingsItem): boolean {
+    return item !== 'controls' && item !== 'back';
   }
 
   render(ctx: CanvasRenderingContext2D): void {
@@ -72,8 +90,9 @@ export class SettingsScene implements Scene {
     ctx.fillStyle = colors.base;
     ctx.fillRect(0, 0, width, height);
     drawScreenTitle(ctx, 'SETTINGS', width / 2, 48);
-    drawMenuList(ctx, items.map((item) => this.toView(item)), this.selected, { x: 180, y: 128, width: 440 });
-    drawFooterHint(ctx, 'UP/DOWN: SELECT  LEFT/RIGHT: CHANGE  ESC: BACK', width / 2, height - 36);
+    drawTouchMenuList(ctx, items.map((item) => this.toView(item)), this.selected, listLayout, this.game.pointer.isTouchMode);
+    if (this.game.pointer.isTouchMode) drawBackButton(ctx);
+    drawFooterHint(ctx, menuHint(this.game, 'UP/DOWN: SELECT  LEFT/RIGHT: CHANGE  ESC: BACK', 'TAP < > TO CHANGE'), width / 2, height - 36);
   }
 
   private changeValue(step: number): void {

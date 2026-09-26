@@ -12,7 +12,14 @@ interface Placed {
   el: HTMLElement;
   rect: OverlayRect;
   isVisible: boolean;
+  /** 入力中は画面上端の中央に大きく出す (スマートフォンの画面のキーボードで隠れないように。iOS は 16px 未満の欄で拡大するため) */
+  isFloating: boolean;
 }
+
+/** 入力中に上端へ出した欄の大きさ (CSS px) */
+const floatingWidth = 320;
+const floatingHeight = 44;
+const floatingFontSize = 18;
 
 /**
  * Canvas の上に重ねる DOM 要素 (Canvas にはテキスト入力・選択できる文字がないため。network.md「参加者の画面」)。
@@ -61,11 +68,19 @@ export class DomOverlay {
     return this.add(el, testId, rect);
   }
 
-  /** 1 行の入力欄 (名前)。filter で入力中の文字を整え、Enter・フォーカスが外れたときに onCommit */
+  /**
+   * 1 行の入力欄 (名前)。filter で入力中の文字を整え、Enter・フォーカスが外れたときに onCommit。
+   * isFloatingWhileEditing が true を返すとき (タッチの端末) は、入力中だけ画面の上端に大きく出す
+   */
   addTextInput(
     testId: string,
     rect: OverlayRect,
-    options: { maxLength: number; filter: (text: string) => string; onCommit: (text: string) => void },
+    options: {
+      maxLength: number;
+      filter: (text: string) => string;
+      onCommit: (text: string) => void;
+      isFloatingWhileEditing?: () => boolean;
+    },
   ): HTMLInputElement {
     const el = document.createElement('input');
     el.type = 'text';
@@ -84,6 +99,10 @@ export class DomOverlay {
       }
     });
     el.addEventListener('blur', () => options.onCommit(el.value));
+    el.enterKeyHint = 'done';
+    el.autocapitalize = 'characters';
+    el.addEventListener('focus', () => this.setFloating(el, options.isFloatingWhileEditing?.() ?? false));
+    el.addEventListener('blur', () => this.setFloating(el, false));
     return this.add(el, testId, rect);
   }
 
@@ -102,6 +121,14 @@ export class DomOverlay {
     this.layout(true);
   }
 
+  private setFloating(el: HTMLElement, isFloating: boolean): void {
+    const p = this.placed.find((q) => q.el === el);
+    if (!p || p.isFloating === isFloating) return;
+    p.isFloating = isFloating;
+    el.style.zIndex = isFloating ? '30' : '10';
+    this.layout(true);
+  }
+
   /** 毎フレーム呼んでよい (Canvas の表示位置が変わったときだけ置き直す) */
   layout(force = false): void {
     const r = this.canvas.getBoundingClientRect();
@@ -112,6 +139,15 @@ export class DomOverlay {
     const sy = r.height / this.canvas.height;
     for (const p of this.placed) {
       const s = p.el.style;
+      if (p.isFloating) {
+        const w = Math.min(floatingWidth, window.innerWidth - 16);
+        s.left = `${window.scrollX + (window.innerWidth - w) / 2}px`;
+        s.top = `${window.scrollY + 8}px`;
+        s.width = `${w}px`;
+        s.height = `${floatingHeight}px`;
+        s.fontSize = `${floatingFontSize}px`;
+        continue;
+      }
       s.left = `${r.left + window.scrollX + p.rect.x * sx}px`;
       s.top = `${r.top + window.scrollY + p.rect.y * sy}px`;
       s.width = `${p.rect.w * sx}px`;
@@ -139,7 +175,7 @@ export class DomOverlay {
       if (e.key === 'Escape') el.blur();
     });
     document.body.appendChild(el);
-    this.placed.push({ el, rect, isVisible: true });
+    this.placed.push({ el, rect, isVisible: true, isFloating: false });
     this.layout(true);
     return el;
   }

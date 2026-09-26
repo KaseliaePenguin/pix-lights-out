@@ -96,6 +96,9 @@ export class AudioManager {
     };
     target.addEventListener('keydown', onGesture);
     target.addEventListener('pointerdown', onGesture);
+    // iOS の Safari は touchend / click の中でないと AudioContext を resume できない
+    target.addEventListener('touchend', onGesture);
+    target.addEventListener('click', onGesture);
     target.document.addEventListener('visibilitychange', () => {
       if (!this.context) return;
       if (target.document.hidden) void this.context.suspend().catch(() => undefined);
