@@ -46,5 +46,10 @@ export const hudMessages = {
     priority: 4,
   }),
   /** 自分のゴール (最優先) */
-  finish: (position: number): HudMessage => ({ text: `P${position} FINISH`, color: colors.white, priority: 0 }),
+  finish: (position: number): HudMessage => ({
+    text: `P${position} FINISH`,
+    color: colors.white,
+    priority: 0,
+    hasChecker: true,
+  }),
 };

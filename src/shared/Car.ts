@@ -360,6 +360,26 @@ export class Car {
     }
   }
 
+  // ------------------------------------------------------------------
+  // 車同士の接触 (carContact.ts から呼ぶ)
+
+  /** 位置をずらす (めり込みの押し戻し) */
+  pushBy(dx: number, dy: number): void {
+    this.x += dx;
+    this.y += dy;
+  }
+
+  /** 接触後の速度ベクトルを設定する (sF・sR を計算し直す。スピン中はスピンの速度) */
+  applyContactVelocity(vx: number, vy: number): void {
+    this.setVelocity(vx, vy);
+  }
+
+  /** 接触による長いスピンを始める。direction は回る向き (+1 = 時計回り) */
+  startContactSpin(direction: number): void {
+    if (this.spinTimer > 0) return;
+    this.startSpin('contact', direction);
+  }
+
   /** スピンを始める。light = 壁 (短い)、contact = 車同士の接触 (長い、M2)。direction は回る向き (+1 = 時計回り) */
   private startSpin(kind: 'light' | 'contact', direction: number): void {
     const p = this.params;

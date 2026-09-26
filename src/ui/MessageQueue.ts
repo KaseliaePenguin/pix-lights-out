@@ -4,6 +4,8 @@ export interface HudMessage {
   color: string;
   /** 小さいほど優先。0 はゴール表示など最優先 (game-design.md 10.2 節の表の 1〜4) */
   priority: number;
+  /** 文言の左右にチェッカーを付ける (`P3 FINISH`) */
+  hasChecker?: boolean;
 }
 
 /** 描画に渡す形 */
@@ -12,6 +14,7 @@ export interface DisplayedMessage {
   color: string;
   /** 点滅中で文字を消している間は false (帯の地は出し続ける) */
   isTextVisible: boolean;
+  hasChecker: boolean;
 }
 
 interface Pending {
@@ -115,7 +118,12 @@ export class MessageQueue {
     if (message === null) return null;
     const isBlinking = message.priority === 1 && message !== this.current;
     const phase = (this.time - this.shownSince) % blinkPeriod;
-    return { text: message.text, color: message.color, isTextVisible: !isBlinking || phase < blinkOn };
+    return {
+      text: message.text,
+      color: message.color,
+      isTextVisible: !isBlinking || phase < blinkOn,
+      hasChecker: message.hasChecker === true,
+    };
   }
 
   private show(message: HudMessage): void {
