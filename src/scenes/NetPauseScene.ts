@@ -81,7 +81,7 @@ export class NetPauseScene implements Scene {
     const note = this.isLeaveArmed
       ? this.isHost
         ? 'PRESS AGAIN TO END THE RACE FOR EVERYONE.'
-        : 'PRESS AGAIN TO LEAVE. YOU WILL NEED A NEW INVITE CODE.'
+        : 'PRESS AGAIN TO LEAVE. YOU WILL NEED A NEW INVITE LINK.'
       : 'THE RACE KEEPS GOING WHILE THIS MENU IS OPEN.';
     drawParagraph(ctx, note, x + 12, noteY, panelW - 24, { color: this.isLeaveArmed ? colors.yellow : colors.subtext });
   }
