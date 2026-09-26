@@ -60,7 +60,8 @@ export function drawTouchPad(pad: TouchPad): void {
         drawPauseIcon(ctx, cx, cy, d, ink);
         break;
       default: {
-        const label = measureText(style.label, d) <= b.w - d * 4 ? style.label : style.shortLabel;
+        // 枠 (2 ドット) の内側に左右 2 ドットずつ余白を残す。入らなければ短い表記にする
+        const label = measureText(style.label, d) <= b.w - d * 8 ? style.label : style.shortLabel;
         const scale = b.button === 'reset' ? d * 2 : d;
         drawText(ctx, label, Math.round(cx), Math.round(cy - (7 * scale) / 2), { scale, color: ink, align: 'center' });
         break;
